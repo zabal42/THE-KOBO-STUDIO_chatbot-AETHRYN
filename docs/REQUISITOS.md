@@ -688,7 +688,7 @@ Para KOBO-RF se ejecutó `npm test` el 2026-10-09 sobre `main` (`4928b66`):
 | RF-23 | Ficha: controles previos | Test |
 | RF-24 | Ficha: errores explícitos | Test |
 
-**24 requisitos implementados**: 9 demostrados con test (RF-03, RF-07, RF-19
-a RF-24), 3 con test parcial (RF-04, RF-08, RF-18) y 12 solo con lectura de
+**24 requisitos implementados**: 8 demostrados con test (RF-03, RF-07, RF-19
+a RF-24), 3 con test parcial (RF-04, RF-08, RF-18) y 13 solo con lectura de
 código. Todo lo que toca el navegador, el panel y Supabase real está sin test
 automático: por eso existe la [§10](#10-verificación-manual).
