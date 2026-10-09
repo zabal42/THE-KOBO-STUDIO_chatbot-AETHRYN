@@ -9,6 +9,9 @@ motor sirve para Kobo y para Bea, y hacia dónde va (Harness).
 
 ## 1. Preparación (una vez, ~20 min)
 
+Requisitos: Node.js con npm y `python3` (lo usa `npm run web` para servir la
+web estática). Todos los comandos se lanzan desde la raíz del repo.
+
 1. **Supabase.** Crear un proyecto nuevo (plan gratuito vale).
    - SQL Editor → ejecutar `supabase/schema.sql`.
    - SQL Editor → ejecutar `supabase/seed-demo.sql`.
@@ -22,15 +25,20 @@ motor sirve para Kobo y para Bea, y hacia dónde va (Harness).
 
 ## 2. Arrancar (cada vez)
 
-Dos terminales:
+Dos terminales, las dos en la raíz del repo (no hace falta `cd` a ningún otro
+sitio: la web de Manu vive en `web/` dentro del propio repo):
 
 ```bash
 # Terminal 1 — backend del asistente
-cd repo && npm run dev                    # http://localhost:3000
+npm run dev                               # http://localhost:3000
 
-# Terminal 2 — web de Manu
-cd Web && python3 -m http.server 5500     # http://localhost:5500
+# Terminal 2 — web de Manu (sirve la carpeta web/)
+npm run web                               # http://localhost:5500
 ```
+
+`npm run web` equivale a `python3 -m http.server 5500 --directory web`. La web
+carga el widget desde `http://localhost:3000/widget.js?bot=<id>` (al final de
+`web/index.html`), así que el backend tiene que estar levantado en :3000.
 
 Comprobaciones rápidas:
 - http://localhost:5500 → aparece la burbuja del chat abajo a la derecha.
@@ -71,6 +79,7 @@ Comprobaciones rápidas:
 | Síntoma | Causa probable |
 | --- | --- |
 | No sale la burbuja en la web | El backend no está en :3000, o el id de `?bot=` no existe |
+| `npm run web` falla | No hay `python3` instalado, o el puerto 5500 ya está ocupado |
 | La burbuja sale pero no responde | `OPENAI_API_KEY` vacía o sin saldo |
 | "Bot no encontrado" | No se ejecutó `seed-demo.sql` |
 | No puedo entrar a /admin | Falta crear el usuario en Supabase → Authentication |
