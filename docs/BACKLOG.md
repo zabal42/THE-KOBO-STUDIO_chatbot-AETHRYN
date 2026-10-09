@@ -443,3 +443,18 @@ tienen avisos conocidos en esta fecha.
 - **Qué hacer:** usar npm 11 o superior para instalar o actualizar
   dependencias (por ejemplo, `npx npm@11 install …`). `npm ci` con npm 10
   sigue funcionando con el `package-lock.json` resultante.
+
+### `/admin/bots` se genera como página estática en producción
+
+- **Qué pasa:** en `npm run build`, `/admin/bots` aparece como `○ (Static)`:
+  Next la prerenderiza una sola vez, en el momento del build, así que en
+  producción la lista de bots quedaría congelada con los datos de ese momento
+  (o vacía, si el build se hace sin acceso a Supabase). Las acciones del panel
+  llaman a `revalidatePath("/admin/bots")` y la regeneran al crear, editar o
+  borrar, pero un cambio hecho por otra vía (SQL Editor, `seed-demo.sql`) no
+  se vería.
+- **Con `npm run dev` no afecta:** en desarrollo todas las páginas se
+  renderizan en cada petición, así que la demo local no lo nota.
+- **Qué hacer:** antes de desplegar en producción, forzar la página a
+  dinámica (tarea aparte, siguiendo la guía de `node_modules/next/dist/docs/`)
+  y comprobar en la salida de `npm run build` que pasa a `ƒ (Dynamic)`.
