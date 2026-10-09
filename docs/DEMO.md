@@ -16,6 +16,13 @@ web estática). Todos los comandos se lanzan desde la raíz del repo.
    - SQL Editor → ejecutar `supabase/schema.sql`.
    - SQL Editor → ejecutar `supabase/seed-demo.sql`.
    - Authentication → Users → crear un usuario (email + contraseña) para entrar al panel.
+   - **Si la base ya existía** (creada con una versión anterior de
+     `schema.sql`): antes de arrancar el código, ejecutar en el SQL Editor
+     `supabase/migrations/20261009120000_genera_ficha_oportunidad.sql` y
+     después relanzar `supabase/seed-demo.sql`. Sin la migración, el detalle
+     de una conversación falla porque pide la columna
+     `bots.genera_ficha_oportunidad`. En una instalación nueva basta con
+     `schema.sql` + `seed-demo.sql`.
 2. **OpenAI.** Crear una clave de API para Kobo y ponerle un límite de gasto bajo.
 3. **Variables.** `cp .env.example .env.local` y rellenar:
    - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`

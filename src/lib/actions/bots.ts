@@ -14,6 +14,8 @@ function leerCamposBot(formData: FormData) {
     whatsapp_numero:
       String(formData.get("whatsapp_numero") ?? "").trim() || null,
     activo: formData.get("activo") === "on",
+    genera_ficha_oportunidad:
+      formData.get("genera_ficha_oportunidad") === "on",
   };
 }
 

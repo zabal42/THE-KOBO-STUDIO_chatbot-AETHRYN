@@ -8,7 +8,7 @@
 --   Kobo:  6b0b0000-0000-4000-8000-000000000001
 --   Bea:   6b0b0000-0000-4000-8000-000000000002
 
-insert into public.bots (id, nombre, empresa, descripcion, color_primario, logo_url, activo)
+insert into public.bots (id, nombre, empresa, descripcion, color_primario, logo_url, activo, genera_ficha_oportunidad)
 values (
   '6b0b0000-0000-4000-8000-000000000001',
   'Kōbō',
@@ -33,13 +33,15 @@ Reglas:
 - Si algo no lo sabes, dilo y ofrece escribir a hola@kobostudio.es.$$,
   '#A32A20',
   '/kobo-logo.png',
-  true
+  true,
+  true  -- genera_ficha_oportunidad: activada en Kobo
 )
 on conflict (id) do update set
   nombre = excluded.nombre, empresa = excluded.empresa, descripcion = excluded.descripcion,
-  color_primario = excluded.color_primario, logo_url = excluded.logo_url, activo = excluded.activo;
+  color_primario = excluded.color_primario, logo_url = excluded.logo_url, activo = excluded.activo,
+  genera_ficha_oportunidad = excluded.genera_ficha_oportunidad;
 
-insert into public.bots (id, nombre, empresa, descripcion, color_primario, logo_url, activo)
+insert into public.bots (id, nombre, empresa, descripcion, color_primario, logo_url, activo, genera_ficha_oportunidad)
 values (
   '6b0b0000-0000-4000-8000-000000000002',
   'Bea',
@@ -70,11 +72,13 @@ Si la persona expresa tristeza profunda, desesperanza o ideas de hacerse daño, 
 No pidas datos personales ni de salud que no hagan falta para acompañar la conversación.$$,
   '#7A9E87',
   null,
-  true
+  true,
+  false  -- genera_ficha_oportunidad: desactivada en Bea
 )
 on conflict (id) do update set
   nombre = excluded.nombre, empresa = excluded.empresa, descripcion = excluded.descripcion,
-  color_primario = excluded.color_primario, logo_url = excluded.logo_url, activo = excluded.activo;
+  color_primario = excluded.color_primario, logo_url = excluded.logo_url, activo = excluded.activo,
+  genera_ficha_oportunidad = excluded.genera_ficha_oportunidad;
 
 -- Conocimiento: se reemplaza entero en cada ejecución.
 delete from public.conocimiento
