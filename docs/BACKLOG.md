@@ -17,6 +17,9 @@ Decidido por Zabal:
 KOBO-04, KOBO-05 y KOBO-03 dependen de KOBO-02 (Vitest y mocks); entre ellas
 no hay dependencias técnicas, el orden es de prioridad.
 
+**KOBO-06** (puerto LLM) se añadió en la tarea KOBO-RF. Su lugar en el orden
+está **pendiente de decidir por Zabal**.
+
 ## Formato
 
 Se usa como base la plantilla `STA/templates/implementation-plan.md`, pero solo
@@ -360,6 +363,90 @@ Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`.
   paso de asignar el rol está en `DEMO.md` y se hace antes de aplicar la
   migración RLS.
 - **Nivel de decisión:** `LEVEL_1_AUTONOMOUS` (decisiones cerradas por Zabal).
+
+---
+
+## KOBO-06 — Puerto LLM con adaptadores OpenAI y Anthropic
+
+- **Objetivo:** que el motor no dependa de un proveedor concreto de modelo de
+  lenguaje. Las rutas y la lógica del bot hablan con un **puerto** (una
+  interfaz propia); detrás hay un **adaptador OpenAI** y un **adaptador
+  Anthropic**. El proveedor y el modelo se eligen **por bot**, con Claude
+  como modelo por defecto previsto.
+- **Razón:** hoy OpenAI está cableado en tres sitios: `src/lib/openai.ts`
+  (cliente), `src/app/api/chat/route.ts` (chat en streaming, modelo
+  `process.env.OPENAI_MODEL ?? "gpt-4o"`) y `src/lib/fichaOportunidad.ts`
+  (ficha con salida estructurada, mismo modelo). Cambiar de proveedor o de
+  modelo exige tocar código, y el modelo es global a todos los bots. Con el
+  puerto, el modelo pasa a ser configuración del bot, igual que su identidad
+  y su conocimiento.
+- **Diseño propuesto (a confirmar al arrancar la tarea):**
+  - **Puerto `ModeloLenguaje`** en `src/lib/llm/` con dos operaciones, las que
+    usa hoy el código:
+    - `conversar(mensajes, opciones) → AsyncIterable<string>`: respuesta en
+      streaming para `/api/chat`.
+    - `extraerEstructurado(mensajes, esquema, opciones) → Promise<unknown>`:
+      salida JSON con esquema para la ficha de oportunidad. Lo que devuelva
+      se sigue pasando por `validarFicha` y `confirmarContacto`: **el modelo
+      propone, el código confirma**, sea cual sea el proveedor.
+  - **Adaptador OpenAI:** encapsula el código actual sin cambiar su
+    comportamiento.
+  - **Adaptador Anthropic:** con el SDK oficial `@anthropic-ai/sdk`. El
+    modelo por defecto previsto es Claude (`claude-opus-5-5` según la
+    referencia consultada el 2026-10-09); el modelo concreto, y si conviene
+    uno más barato para el chat, se decide al arrancar la tarea midiendo
+    coste y calidad.
+  - **Elección por bot:** columnas nuevas en `bots` (por ejemplo
+    `proveedor_llm` y `modelo_llm`), editables desde `BotForm`, con valores
+    por defecto en la migración. Un único punto de selección del adaptador;
+    las rutas no importan ningún SDK de proveedor.
+  - **Credenciales:** `ANTHROPIC_API_KEY` en `.env.local` y en `.env.example`
+    (vacía), igual que `OPENAI_API_KEY`. Los clientes se crean en servidor;
+    nada de estado por cliente en variables de módulo.
+- **La voz se queda en OpenAI.** `/api/tts` usa `openai.audio.speech`
+  (`tts-1`, voz `nova`). La API de Anthropic no ofrece texto a voz, así que la
+  voz seguirá necesitando un proveedor con TTS (hoy OpenAI) aunque el chat
+  pase a Claude. Consecuencia: aunque todos los bots usen Claude,
+  `OPENAI_API_KEY` sigue siendo necesaria mientras exista el botón de
+  escuchar. Si se quiere desacoplar también la voz, sería un segundo puerto
+  (`Voz`) en otra tarea.
+- **Alcance:**
+  - Puerto, adaptadores OpenAI y Anthropic, punto único de selección.
+  - `/api/chat` y `generarFichaOportunidad` pasan a usar el puerto.
+  - Migración SQL en `supabase/migrations/` y reflejo en `schema.sql` y
+    `seed-demo.sql` (Kobo y Bea con el proveedor por defecto).
+  - Campo de proveedor y modelo en `BotForm.tsx` y `leerCamposBot`.
+  - Tests con Vitest y SDKs mockeados: cada adaptador traduce bien mensajes
+    y streaming; el selector elige el adaptador según el bot; la ficha
+    generada por cualquier adaptador sigue pasando por la validación.
+- **Qué NO tocar:** las validaciones de entrada de `/api/chat`; el formato de
+  respuesta al widget (texto plano en streaming); `/api/tts`; el contenido de
+  los bots.
+- **Salida esperada:** `src/lib/llm/` (puerto + adaptadores + selector),
+  rutas adaptadas, migración, formulario, tests y nota en `docs/`.
+- **Ficheros / sistemas:** `src/lib/llm/` (nuevo), `src/lib/openai.ts`,
+  `src/app/api/chat/route.ts`, `src/lib/fichaOportunidad.ts`,
+  `src/lib/actions/bots.ts`, `src/components/admin/BotForm.tsx`,
+  `src/types/index.ts`, `supabase/`, `.env.example`, `package.json`.
+- **Criterio de hecho:**
+  - `grep -rn "from \"openai\"\|@anthropic-ai/sdk" src --include=*.ts` solo
+    devuelve ficheros de `src/lib/llm/` (y `/api/tts` para la voz).
+  - Con `npm run dev`, un bot configurado con Anthropic y otro con OpenAI
+    responden en streaming en `/widget`.
+  - Generar la ficha en Kobo funciona con ambos proveedores.
+  - Un fallo del proveedor se ve en el widget y en el panel; nunca una
+    respuesta vacía presentada como real.
+  - Cumple la Definition of Done de `CLAUDE.md`.
+- **Condición de parada:** si un proveedor no soporta algo que el puerto
+  necesita (por ejemplo salida estructurada estricta), parar y decidir si el
+  puerto se degrada o el adaptador lo emula con validación en código.
+- **Dependencias:** KOBO-02. Conviene después de KOBO-03 para que el rate
+  limit proteja también el gasto en el nuevo proveedor.
+- **Riesgos y controles:** coste distinto por proveedor y modelo → límite de
+  gasto en ambas cuentas; cambio de tono entre modelos → probar los guiones
+  de `DEMO.md` con cada bot antes de cambiar el valor por defecto.
+- **Nivel de decisión:** `LEVEL_2_RECOMMENDED` (modelo por defecto y coste
+  los decide Zabal al arrancar).
 
 ---
 
