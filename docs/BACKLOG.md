@@ -266,47 +266,91 @@ Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
   - `src/proxy.ts` solo comprueba que haya sesión en `/admin/*`; no mira roles.
   - Las server actions (`src/lib/actions/bots.ts`,
     `src/lib/actions/conocimiento.ts`) usan `createAdminClient()`, es decir,
-    la *service role key*, que **se salta RLS**. Por tanto **cambiar solo las
-    políticas RLS no basta**: la comprobación de rol tiene que estar en el
-    código de cada acción.
+    la *service role key*, que **se salta RLS**.
   - En `supabase/schema.sql`, las políticas `bots_authenticated_all` y
     `conocimiento_authenticated_all` dan acceso total a cualquier
     `authenticated`.
+- **Diseño decidido:**
+  - **El rol se comprueba dentro de cada server action**, no solo en RLS:
+    como las acciones usan la service role, RLS no las frena. RLS se endurece
+    también, pero como defensa en profundidad, no como control principal.
+  - **El rol se lee de `app_metadata`** del usuario de Supabase
+    (`app_metadata.rol === "admin"`), **nunca de `user_metadata`**: este
+    último lo puede modificar el propio usuario desde el cliente con
+    `auth.updateUser`, así que cualquiera podría darse rol admin.
+    `app_metadata` solo se escribe con la service role.
+  - En las acciones, el usuario se obtiene con `supabase.auth.getUser()` (lo
+    valida el servidor de Auth y devuelve el `app_metadata` actual), no con
+    `getSession()`, que lee la cookie sin validarla.
 - **Alcance:**
-  - Fuente del rol: tabla `perfiles` (`user_id`, `rol`) o `app_metadata` de
-    Supabase Auth (no `user_metadata`, que el propio usuario puede editar).
-  - Helper de servidor `exigirAdmin()` que obtiene el usuario de la sesión y
-    comprueba el rol; llamado al principio de cada acción de crear, editar y
-    borrar bots y conocimiento.
-  - Ocultar en la UI los botones de crear/editar/borrar a quien no es admin
-    (solo cosmético: la seguridad está en el servidor).
-  - Endurecer las políticas RLS de `bots` y `conocimiento` para que escribir
-    exija rol admin (defensa en profundidad).
+  - Helper de servidor `exigirAdmin()` en `src/lib/` que obtiene el usuario
+    con `getUser()` y lanza error de autorización si no hay sesión o si
+    `app_metadata.rol` no es `"admin"`. Se llama **al principio** de
+    `createBotAction`, `updateBotAction`, `deleteBotAction` y de las acciones
+    de crear, editar y borrar de `src/lib/actions/conocimiento.ts`, antes de
+    tocar la base de datos.
+  - Ocultar en la UI los botones y páginas de crear/editar/borrar a quien no
+    es admin (solo cosmético: la seguridad está en el servidor).
+  - Migración SQL en `supabase/migrations/` (y reflejo en `schema.sql`) que
+    sustituye `bots_authenticated_all` y `conocimiento_authenticated_all` por:
+    lectura para `authenticated`; escritura solo si
+    `(auth.jwt() -> 'app_metadata' ->> 'rol') = 'admin'`.
+  - Documentar en `DEMO.md` (paso de preparación) **cómo asignar el rol desde
+    el panel de Supabase**:
+    1. Authentication → Users: crear el usuario (como hoy).
+    2. SQL Editor → ejecutar, con el email de ese usuario:
+
+       ```sql
+       update auth.users
+       set raw_app_meta_data =
+         coalesce(raw_app_meta_data, '{}'::jsonb) || '{"rol": "admin"}'::jsonb
+       where email = 'usuario@ejemplo.com';
+       ```
+
+    3. Comprobar con
+       `select email, raw_app_meta_data from auth.users;` que aparece
+       `"rol": "admin"`.
+    4. Cerrar sesión en `/admin` y volver a entrar: el JWT (y por tanto RLS)
+       solo lleva el rol nuevo tras renovar la sesión. Las server actions ya lo
+       ven antes, porque `getUser()` consulta al servidor.
+
+    Alternativa por código, solo desde servidor y nunca desde el navegador:
+    `supabase.auth.admin.updateUserById(id, { app_metadata: { rol: "admin" } })`
+    con la service role.
 - **Qué NO tocar:** las rutas públicas (`/api/chat`, `/api/tts`, `/widget`,
   `/widget-embed`, `/widget.js`), que siguen funcionando sin login; las
-  conversaciones (fuera de alcance salvo decisión expresa); el flujo de login.
-- **Salida esperada:** migración SQL, helper de autorización, acciones
-  protegidas, UI condicionada.
-- **Ficheros / sistemas:** `supabase/schema.sql` (o migración),
-  `src/lib/actions/bots.ts`, `src/lib/actions/conocimiento.ts`, `src/lib/`
-  (helper), páginas y componentes de `src/app/admin/(dashboard)/bots/` y
-  `src/components/admin/`.
+  conversaciones y la generación de la ficha de KOBO-04 (siguen al alcance de
+  cualquier usuario autenticado: no son crear, editar ni borrar bots o
+  conocimiento); el flujo de login; `user_metadata`, que no se lee para nada.
+- **Salida esperada:** helper de autorización, acciones protegidas, UI
+  condicionada, migración RLS, instrucciones en `DEMO.md`.
+- **Ficheros / sistemas:** `src/lib/` (helper), `src/lib/actions/bots.ts`,
+  `src/lib/actions/conocimiento.ts`, páginas y componentes de
+  `src/app/admin/(dashboard)/bots/` y `src/components/admin/`,
+  `supabase/migrations/` y `supabase/schema.sql`, `docs/DEMO.md`.
 - **Criterio de hecho:**
   - Con un usuario sin rol admin: invocar crear/editar/borrar bot o
     conocimiento devuelve error de autorización y la tabla no cambia
     (comprobable en Supabase).
-  - Con un usuario admin: las mismas operaciones funcionan como hoy.
-  - Tests (Vitest) del helper y de al menos una acción por tabla con la sesión
-    mockeada: sin sesión, sin rol admin y con rol admin.
+  - Un usuario que se pone `{"rol": "admin"}` en `user_metadata` (vía
+    `auth.updateUser` desde el navegador) sigue sin poder escribir.
+  - Con un usuario admin asignado según `DEMO.md`: las mismas operaciones
+    funcionan como hoy.
+  - `grep -rn "user_metadata" src` no devuelve ninguna comprobación de rol.
+  - Tests (Vitest) del helper y de al menos una acción por tabla con
+    `getUser()` mockeado: sin sesión, rol solo en `user_metadata`, sin rol y
+    con `app_metadata.rol = "admin"`.
   - `npm run lint` y `npm run build` pasan.
 - **Condición de parada:** si el modelo de roles necesita más de dos niveles o
   roles por bot (multi-tenant real con varios clientes en el mismo panel),
   replanificar: es otra arquitectura.
-- **Dependencias:** KOBO-02.
-- **Riesgos y controles:** quedarse sin ningún admin tras la migración → la
-  migración asigna el rol al usuario de demo de forma explícita y documentada
-  en `DEMO.md`.
-- **Nivel de decisión:** `LEVEL_2_RECOMMENDED` (fuente del rol).
+- **Dependencias:** KOBO-02. Va después de KOBO-04, así que el campo
+  `genera_ficha_oportunidad` del formulario del bot queda protegido por la
+  misma comprobación de `updateBotAction`.
+- **Riesgos y controles:** quedarse sin ningún admin tras la migración → el
+  paso de asignar el rol está en `DEMO.md` y se hace antes de aplicar la
+  migración RLS.
+- **Nivel de decisión:** `LEVEL_1_AUTONOMOUS` (decisiones cerradas por Zabal).
 
 ---
 
