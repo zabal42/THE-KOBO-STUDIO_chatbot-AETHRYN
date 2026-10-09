@@ -7,6 +7,7 @@ export interface Bot {
   logo_url: string | null;
   activo: boolean;
   whatsapp_numero: string | null;
+  genera_ficha_oportunidad: boolean;
   created_at: string;
 }
 
@@ -37,4 +38,27 @@ export interface Conocimiento {
   contenido: string;
   activo: boolean;
   created_at: string;
+}
+
+export interface ContactoLead {
+  nombre: string | null;
+  email: string | null;
+  telefono: string | null;
+}
+
+/**
+ * Resumen estructurado del lead (KOBO-04). Cada campo puede ser null: si la
+ * conversación no lo dice, no se inventa.
+ */
+export interface FichaOportunidad {
+  problema: string | null;
+  sector: string | null;
+  integraciones: string[] | null;
+  plazo: string | null;
+  contacto: ContactoLead | null;
+}
+
+export interface FichaOportunidadGuardada extends FichaOportunidad {
+  conversacion_id: string;
+  generada_at: string;
 }

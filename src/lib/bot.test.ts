@@ -25,6 +25,7 @@ function crearBot(cambios: Partial<Bot> = {}): Bot {
     logo_url: null,
     activo: true,
     whatsapp_numero: null,
+    genera_ficha_oportunidad: false,
     created_at: "2026-01-01T00:00:00Z",
     ...cambios,
   };

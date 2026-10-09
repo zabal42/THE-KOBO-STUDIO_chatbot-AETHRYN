@@ -160,6 +160,29 @@ export function BotForm({ action, bot }: BotFormProps) {
         </label>
       </div>
 
+      <div>
+        <div className="flex items-center gap-2">
+          <input
+            id="genera_ficha_oportunidad"
+            name="genera_ficha_oportunidad"
+            type="checkbox"
+            defaultChecked={bot?.genera_ficha_oportunidad ?? false}
+            className="h-4 w-4 rounded border-gray-300"
+          />
+          <label
+            htmlFor="genera_ficha_oportunidad"
+            className="text-sm text-gray-700"
+          >
+            Generar ficha de oportunidad
+          </label>
+        </div>
+        <p className="mt-1 text-xs text-gray-400">
+          Permite generar desde el panel, bajo demanda, un resumen del lead
+          (problema, sector, integraciones, plazo y contacto) a partir de cada
+          conversación. Cada generación es una llamada a OpenAI.
+        </p>
+      </div>
+
       <div className="flex items-center gap-3 pt-2">
         <SubmitButton esEdicion={Boolean(bot)} />
         <Link
