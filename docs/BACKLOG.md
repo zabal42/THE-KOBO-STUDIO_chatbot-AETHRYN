@@ -427,3 +427,20 @@ tienen avisos conocidos en esta fecha.
   RLS real que filtre por tenant (sin depender de la service role en las
   lecturas del panel) y pruebas cross-tenant que demuestren que un usuario de
   un tenant no ve ni modifica datos de otro.
+
+### Vitest fijado en la versión 4
+
+- **Qué pasa:** Vitest 5 requiere `@types/node` 22 o superior y el proyecto
+  usa `^20`. Por eso KOBO-02 fija `vitest` en `^4.1.11`, que acepta
+  `@types/node` 20.
+- **Cuándo resolverlo:** al subir `@types/node` a 22 o superior (tarea
+  aparte), se puede pasar a Vitest 5 y verificar con `npm test`.
+
+### npm 10 falla al instalar dependencias de desarrollo
+
+- **Qué pasa:** con npm 10, `npm install -D vitest` falla con
+  `Cannot read properties of null (reading 'edgesOut')`, un fallo interno del
+  resolvedor de npm.
+- **Qué hacer:** usar npm 11 o superior para instalar o actualizar
+  dependencias (por ejemplo, `npx npm@11 install …`). `npm ci` con npm 10
+  sigue funcionando con el `package-lock.json` resultante.
