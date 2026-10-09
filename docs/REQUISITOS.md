@@ -1092,7 +1092,7 @@ propone añadirla como tareas aparte):
 | `/widget-embed` pinta bots inactivos | `src/app/widget-embed/page.tsx:21-25` | Burbuja visible que luego falla. |
 | Sin unicidad de conversación por sesión | `supabase/schema.sql:35-41`, `src/lib/bot.ts:33-49` | Dos peticiones simultáneas de una sesión nueva podrían crear dos conversaciones. |
 | `OPENAI_MODEL` no documentada | `.env.example` | Variable que cambia el modelo y solo se ve en el código. |
-| Restos de WhatsApp | `supabase/schema.sql:17`, `38`; `BotForm.tsx:133-148` | Confunde: sugiere una función que no existe. |
+| Restos de WhatsApp | `supabase/schema.sql:17`, `38`; `src/components/admin/BotForm.tsx:133-148` | Confunde: sugiere una función que no existe. |
 | BACKLOG sin estado | `docs/BACKLOG.md` | KOBO-02 y KOBO-04 están hechas y no se marcan. |
 
 ### 11.2 Hoja de ruta por fases
