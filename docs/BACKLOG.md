@@ -5,6 +5,18 @@
 **Preparado en:** tarea KOBO-01
 **Fecha:** 2026-10-09
 
+## Orden de ejecución
+
+Decidido por Zabal:
+
+1. **KOBO-02** — Tests mínimos con Vitest. Es la red para todo lo demás.
+2. **KOBO-04** — Ficha de oportunidad.
+3. **KOBO-05** — Panel por roles.
+4. **KOBO-03** — Rate limit.
+
+KOBO-04, KOBO-05 y KOBO-03 dependen de KOBO-02 (Vitest y mocks); entre ellas
+no hay dependencias técnicas, el orden es de prioridad.
+
 ## Formato
 
 Se usa como base la plantilla `STA/templates/implementation-plan.md`, pero solo
@@ -20,13 +32,6 @@ siempre comprobable con un comando o una acción concreta.
 
 Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
 `npm run lint` y `npm run build` pasan.
-
-## Orden propuesto
-
-1. **KOBO-02** primero: sin red de tests, el resto se toca a ciegas.
-2. **KOBO-03** después: reutiliza Vitest y los mocks de KOBO-02.
-3. **KOBO-05** antes de cualquier piloto con más de un usuario en el panel.
-4. **KOBO-04** al final: es funcionalidad nueva, no endurecimiento.
 
 ---
 
@@ -78,113 +83,185 @@ Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
 
 ---
 
-## KOBO-03 — Rate limit simple en memoria para /api/chat y /api/tts
+## KOBO-03 — Rate limit con puerto RateLimiter y adaptador en memoria
 
-- **Objetivo:** limitar peticiones por IP y por `session_id` en `/api/chat` y
-  `/api/tts`, devolviendo `429` cuando se supera el límite.
+- **Objetivo:** limitar peticiones en `/api/chat` y `/api/tts`, con límite
+  principal por `session_id` y secundario por IP, devolviendo `429` cuando se
+  supera.
 - **Razón:** cada petición cuesta dinero en OpenAI. `DEMO.md` ya lista el rate
   limiting como pendiente antes de un piloto público.
+- **Diseño decidido:**
+  - **Puerto `RateLimiter`.** Las rutas solo conocen una interfaz, por ejemplo
+    `consumir(clave, limite, ventanaMs) → Promise<{ permitido, reintentarEnSegundos }>`.
+    Es asíncrona para que un adaptador remoto (Redis/Upstash, Postgres) encaje
+    sin cambiar la firma.
+  - **Adaptador en memoria** como única implementación en esta tarea. Se elige
+    el adaptador en un solo sitio (p. ej. `src/lib/rateLimit/index.ts`); las
+    rutas no lo importan directamente.
+  - **Claves con `bot_id`**, para que dos tenants nunca compartan contador:
+    `<bot_id>:sesion:<session_id>` (límite principal) y `<bot_id>:ip:<ip>`
+    (límite secundario, más holgado, contra quien rota `session_id`).
+  - **Orden en la ruta:** parsear y validar la entrada (JSON, campos, UUID) →
+    rate limit (sesión y luego IP) → buscar bot → OpenAI. Las peticiones
+    inválidas se rechazan antes y no cuestan nada.
+  - **`/api/tts` recibe `bot_id` y `session_id`.** El widget hoy solo envía
+    `{ texto }`; pasará a enviar también `bot_id` y `session_id` (el `bot_id`
+    hace falta porque forma parte de la clave). `/api/tts` valida ambos como
+    UUID y protege `request.json()` igual que `/api/chat` (hoy un JSON
+    inválido da `500`).
 - **Alcance:**
-  - Un módulo pequeño (p. ej. `src/lib/rateLimit.ts`) de ventana fija o
-    deslizante, configurable por límite y ventana.
-  - Aplicarlo en `/api/chat` (clave IP y clave `session_id`) y en `/api/tts`.
+  - Puerto `RateLimiter`, adaptador en memoria y punto único de selección.
+  - Aplicarlo en `/api/chat` y `/api/tts` con las claves de arriba.
+  - Cambio en el cliente: `useChatSession` expone `sessionId` y `ChatWidget`
+    lo envía, junto con `botId`, en la llamada a `/api/tts`.
   - Respuesta `429` con mensaje en español y cabecera `Retry-After`.
-  - Tests con Vitest (temporizadores falsos): por debajo del límite pasa,
-    al superarlo `429`, tras la ventana vuelve a pasar; IP y `session_id`
-    cuentan por separado.
-  - Documentar en `docs/` (o en el propio módulo) que **un limitador en
-    memoria no sirve con varias instancias ni en serverless**: cada instancia
-    tiene su propio contador y se reinicia en cada despliegue. Para producción
-    hace falta un almacén compartido (Redis/Upstash, tabla en Postgres…).
-- **Decisiones abiertas (antes de implementar):**
-  - `/api/tts` **no recibe hoy `session_id`**: el widget solo envía `{ texto }`
-    (`src/components/chat/ChatWidget.tsx`). Limitar por sesión en TTS obliga a
-    cambiar el cliente para enviarlo. Alternativa: en TTS, solo por IP.
-  - La IP sale de `x-forwarded-for`, que el cliente puede falsificar si no hay
-    un proxy de confianza delante. Aceptable en demo; documentarlo.
-  - `CLAUDE.md` prohíbe guardar estado por cliente en variables de módulo.
-    Los contadores de rate limit no son configuración de cliente, pero sí son
-    estado de módulo: decidir si la clave incluye `bot_id` para que un tenant
-    no agote el cupo de otro, y dejar escrita la excepción.
-- **Qué NO tocar:** la lógica de validación existente de `/api/chat` (sigue
-  igual y se ejecuta antes o después del limitador según se decida, pero no
-  se reescribe); Supabase; dependencias externas de rate limit (nada de
-  Redis en esta tarea).
-- **Salida esperada:** módulo de rate limit, dos rutas que lo usan, tests,
-  nota de limitaciones.
-- **Ficheros / sistemas:** `src/lib/` (nuevo), `src/app/api/chat/route.ts`,
-  `src/app/api/tts/route.ts`, tests; `ChatWidget.tsx` solo si se decide
-  enviar `session_id` a TTS.
+  - Límites y ventanas configurables por variable de entorno, con valores por
+    defecto holgados para no romper la demo en directo.
+  - Tests con Vitest (temporizadores falsos): por debajo del límite pasa; al
+    superarlo, `429`; tras la ventana vuelve a pasar; el mismo `session_id` en
+    dos bots distintos lleva contadores separados; el límite por IP salta
+    aunque cambie el `session_id`.
+  - Documentación en el repo (en `docs/` y en el propio módulo):
+    - **El adaptador en memoria no sirve con varias instancias ni en
+      serverless:** cada instancia tiene su propio contador y se reinicia en
+      cada despliegue. Para producción se escribe otro adaptador del puerto
+      `RateLimiter` (almacén compartido) y se cambia en el punto único de
+      selección, **sin tocar las rutas**.
+    - **La IP de `x-forwarded-for` solo es fiable detrás de un proxy de
+      confianza** que sobrescriba esa cabecera. Sin él, el cliente la puede
+      falsificar; por eso la IP es el límite secundario y no el principal.
+    - El adaptador en memoria guarda estado a nivel de módulo. Es una excepción
+      acotada a la regla de `CLAUDE.md`: no contiene configuración ni
+      credenciales de ningún cliente, y los contadores van separados por
+      `bot_id`.
+- **Qué NO tocar:** las validaciones existentes de `/api/chat` (se mantienen
+  tal cual, el limitador va detrás); Supabase; ninguna dependencia externa de
+  rate limit (nada de Redis en esta tarea); el resto del comportamiento del
+  widget.
+- **Salida esperada:** puerto y adaptador, dos rutas que lo usan, cliente que
+  envía `bot_id` y `session_id` a TTS, tests y nota de limitaciones.
+- **Ficheros / sistemas:** `src/lib/rateLimit/` (nuevo),
+  `src/app/api/chat/route.ts`, `src/app/api/tts/route.ts`,
+  `src/components/chat/useChatSession.ts`,
+  `src/components/chat/ChatWidget.tsx`, tests, `.env.example` (límites).
 - **Criterio de hecho:**
-  - `npm test` pasa e incluye los casos de rate limit de ambas rutas.
-  - Con `npm run dev`, un bucle de peticiones a `/api/chat` por encima del
-    límite recibe `429` (comprobable con `curl` en bucle).
-  - La limitación multiinstancia está escrita en el repo.
+  - `npm test` pasa e incluye los casos de rate limit de ambas rutas y del
+    adaptador.
+  - Con `npm run dev`, un bucle de `curl` a `/api/chat` con el mismo
+    `session_id` por encima del límite recibe `429` con `Retry-After`.
+  - En el navegador, el botón de escuchar del widget sigue funcionando y la
+    petición a `/api/tts` lleva `bot_id` y `session_id`.
+  - Las rutas no importan el adaptador en memoria (comprobable con
+    `grep -rn "memoria" src/app/api` o el nombre que se le dé).
+  - Las tres notas de documentación están escritas en el repo.
   - `npm run lint` y `npm run build` pasan.
-- **Condición de parada:** si se decide que hace falta almacén compartido ya,
-  es otra tarea (cambia arquitectura y coste).
+- **Condición de parada:** si hace falta almacén compartido ya (despliegue con
+  varias instancias), es otra tarea: un adaptador nuevo, no un cambio de rutas.
 - **Dependencias:** KOBO-02 (Vitest y mocks).
-- **Riesgos y controles:** limitar demasiado rompe la demo en directo → límites
-  por variable de entorno con valores por defecto holgados.
-- **Nivel de decisión:** `LEVEL_2_RECOMMENDED` (por las decisiones abiertas).
+- **Riesgos y controles:** limitar demasiado rompe la demo → valores por
+  defecto holgados y configurables.
+- **Nivel de decisión:** `LEVEL_1_AUTONOMOUS` (decisiones cerradas por Zabal).
 
 ---
 
 ## KOBO-04 — Ficha de oportunidad del lead
 
-- **Objetivo:** a partir de una conversación del bot de Kobo, generar un
-  resumen estructurado del lead (problema, sector, integraciones, plazo,
-  contacto si lo dio) y mostrarlo en `/admin/conversaciones/[id]`.
+- **Objetivo:** a partir de una conversación de un bot que tenga la ficha
+  activada (en la demo, Kobo), generar un resumen estructurado del lead
+  (problema, sector, integraciones, plazo, contacto si lo dio) y mostrarlo en
+  `/admin/conversaciones/[id]`.
 - **Razón:** convertir conversaciones en oportunidades comerciales legibles
   sin leer el chat entero. Es el primer paso hacia la "ficha del cliente" del
   Harness.
+- **Diseño decidido:**
+  - **Bajo demanda.** La ficha se genera al pulsar un botón "Generar ficha"
+    (o "Regenerar ficha" si ya existe) en `/admin/conversaciones/[id]`. Sin
+    cron y sin detección de inactividad: el chat web no tiene evento de cierre
+    y el cron se retiró a propósito del proyecto.
+  - **Activación por bot** con una columna nueva en `bots`:
+    `genera_ficha_oportunidad boolean not null default false`. Nada de fijar
+    el id del bot de Kobo en el código (regla multi-tenant). En la demo:
+    **activada en Kobo, desactivada en Bea**.
+  - **El código confirma.** La server action de generar comprueba en servidor
+    que el bot de la conversación tiene la columna a `true` antes de llamar a
+    OpenAI; ocultar el botón en la UI es solo cosmético.
 - **Alcance:**
-  - Esquema fijo de la ficha: `problema`, `sector`, `integraciones` (lista),
-    `plazo`, `contacto` (nombre/email/teléfono) — cada campo puede ser `null`.
-  - Generación con OpenAI usando salida estructurada (JSON con esquema) y
-    **validación en código** del resultado antes de guardarlo.
-  - Persistencia en una tabla nueva (p. ej. `fichas_oportunidad`, 1:1 con
-    `conversaciones`) con RLS como el resto del esquema.
-  - Sección "Ficha de oportunidad" en la página de detalle de la conversación.
-- **Decisiones abiertas (antes de implementar):**
-  - **Qué es "el final de una conversación".** El chat web no tiene evento de
-    cierre. Propuesta: generar la ficha **bajo demanda** desde el panel
-    (botón "Generar / regenerar ficha"); alternativa: por inactividad, que
-    requiere cron, retirado a propósito del proyecto.
-  - **Qué bot es "el de Kobo".** No se puede fijar por id en el código (regla
-    multi-tenant). Propuesta: una columna por bot (p. ej. `genera_ficha
-    boolean`) editable en `/admin/bots`.
-  - **Datos personales.** El contacto es dato personal: decidir retención y
-    mencionarlo en la política de privacidad pendiente.
+  - **Base de datos:**
+    - Migración SQL `supabase/migrations/<fecha>_genera_ficha_oportunidad.sql`
+      (carpeta nueva) con
+      `alter table public.bots add column if not exists genera_ficha_oportunidad boolean not null default false;`
+      y la tabla de fichas (abajo), para bases ya creadas.
+    - Reflejar la columna y la tabla en `supabase/schema.sql`, para que una
+      instalación nueva siguiendo `DEMO.md` (schema → seed) funcione sin pasos
+      extra.
+    - `supabase/seed-demo.sql`: añadir `genera_ficha_oportunidad` a la lista
+      de columnas y al `on conflict … do update` de ambos bots, con `true` en
+      Kobo (`…0001`) y `false` en Bea (`…0002`).
+    - Tabla nueva `fichas_oportunidad` (1:1 con `conversaciones`) con RLS como
+      el resto del esquema.
+  - **Ficha:** esquema fijo `problema`, `sector`, `integraciones` (lista),
+    `plazo`, `contacto` (nombre/email/teléfono); cada campo puede ser `null`.
+    Generación con OpenAI usando salida estructurada (JSON con esquema) y
+    **validación en código** antes de guardar.
+  - **Panel:**
+    - Botón y sección "Ficha de oportunidad" en la página de detalle de la
+      conversación, visibles solo si el bot tiene la ficha activada.
+    - Campo "Generar ficha de oportunidad" en el formulario del bot
+      (`BotForm.tsx` + `leerCamposBot` en `src/lib/actions/bots.ts`), para no
+      depender del SQL Editor.
+  - **Autenticación en la acción:** la server action de generar la ficha
+    obtiene el usuario con `supabase.auth.getUser()` y, si no hay usuario
+    autenticado, devuelve error de autorización **antes** de leer la
+    conversación o llamar a OpenAI. No exige rol `admin` (eso es KOBO-05 y
+    solo para bots y conocimiento), pero tampoco confía solo en que
+    `src/proxy.ts` proteja `/admin/*`: la acción se defiende por sí misma.
+  - Tipos actualizados en `src/types/index.ts`.
 - **Qué NO tocar:** el flujo de `/api/chat` (la ficha no se genera en la ruta
-  pública ni alarga la respuesta al usuario); el bot de Bea; ninguna
-  integración externa (CRM, email, WhatsApp). La ficha no dispara ningún
-  efecto secundario.
+  pública ni alarga la respuesta al usuario); el contenido de Bea; ninguna
+  integración externa (CRM, email, WhatsApp); ningún cron. La ficha no dispara
+  ningún efecto secundario fuera de guardarse.
 - **Regla de producto aplicable:** "nunca afirmar lo que no se ha obtenido".
   Si el usuario no dio contacto, el campo queda `null`, nunca se inventa.
   Si la llamada a OpenAI falla, la página lo dice ("no se ha podido generar la
   ficha"), no muestra una ficha vacía como si fuera real.
-- **Salida esperada:** migración SQL, función de generación + validación,
-  sección en la página de detalle.
-- **Ficheros / sistemas:** `supabase/schema.sql` (o migración), `src/lib/`
-  (nuevo), `src/types/index.ts`,
-  `src/app/admin/(dashboard)/conversaciones/[id]/page.tsx`, posiblemente
-  `BotForm.tsx` y `src/lib/actions/bots.ts` si se añade la columna por bot.
+- **Salida esperada:** migración SQL, `schema.sql` y `seed-demo.sql`
+  actualizados, función de generación + validación, server action, botón y
+  sección en la página de detalle, campo en el formulario del bot.
+- **Ficheros / sistemas:** `supabase/migrations/` (nuevo),
+  `supabase/schema.sql`, `supabase/seed-demo.sql`, `src/lib/` (nuevo),
+  `src/lib/actions/` (acción de generar), `src/lib/actions/bots.ts`,
+  `src/components/admin/BotForm.tsx`, `src/types/index.ts`,
+  `src/app/admin/(dashboard)/conversaciones/[id]/page.tsx`.
 - **Criterio de hecho:**
-  - Con la demo (`seed-demo.sql`), tras el guion del Acto 1 de `DEMO.md`, la
-    página de la conversación muestra una ficha con problema y sector
-    rellenos y el contacto ficticio dado.
+  - En un Supabase recién montado con `DEMO.md`, `select nombre,
+    genera_ficha_oportunidad from bots;` devuelve `true` para Kobo y `false`
+    para Bea. Relanzar `seed-demo.sql` no cambia el resultado.
+  - Tras el guion del Acto 1 de `DEMO.md`, pulsar "Generar ficha" en la
+    conversación de Kobo muestra una ficha con problema y sector rellenos y el
+    contacto ficticio dado.
+  - En una conversación de Bea no aparece el botón, y llamar a la acción
+    directamente con ese id devuelve error sin llamar a OpenAI.
+  - Invocar la acción sin sesión devuelve error de autorización, sin consultar
+    la conversación ni llamar a OpenAI.
   - Una conversación en la que no se da contacto muestra `contacto` vacío.
-  - Tests (Vitest) de la validación: JSON incompleto o con tipos erróneos se
-    rechaza; OpenAI mockeado.
+  - Tests (Vitest), con OpenAI, Supabase y `getUser()` mockeados: validación
+    de la ficha (JSON incompleto o con tipos erróneos se rechaza); rechazo de
+    la acción sin usuario autenticado (`getUser()` sin usuario); rechazo para
+    bots sin la columna activa; y generación correcta con usuario autenticado
+    sin rol `admin`.
   - Fallo simulado de OpenAI → mensaje explícito en la página.
   - `npm run lint` y `npm run build` pasan.
-- **Condición de parada:** si se elige generación automática por inactividad
-  (reintroduce cron), escalar: `CLAUDE.md` exige tarea explícita.
-- **Dependencias:** KOBO-02. Recomendable después de KOBO-05.
-- **Riesgos y controles:** coste por generación → solo bajo demanda y solo en
-  bots con la opción activa.
-- **Nivel de decisión:** `LEVEL_2_RECOMMENDED`.
+- **Condición de parada:** cualquier propuesta de generación automática
+  (inactividad, cron, al cerrar el widget) queda fuera: tarea aparte y
+  explícita, como exige `CLAUDE.md`.
+- **Dependencias:** KOBO-02.
+- **Riesgos y controles:**
+  - Coste por generación → solo bajo demanda y solo en bots con la columna
+    activa.
+  - El contacto es dato personal: la ficha lo hereda de la conversación, que
+    ya lo guarda. Su retención entra en la política de privacidad pendiente
+    (`DEMO.md` §4); no bloquea esta tarea en la demo con datos ficticios.
+- **Nivel de decisión:** `LEVEL_1_AUTONOMOUS` (decisiones cerradas por Zabal).
 
 ---
 
@@ -199,47 +276,91 @@ Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
   - `src/proxy.ts` solo comprueba que haya sesión en `/admin/*`; no mira roles.
   - Las server actions (`src/lib/actions/bots.ts`,
     `src/lib/actions/conocimiento.ts`) usan `createAdminClient()`, es decir,
-    la *service role key*, que **se salta RLS**. Por tanto **cambiar solo las
-    políticas RLS no basta**: la comprobación de rol tiene que estar en el
-    código de cada acción.
+    la *service role key*, que **se salta RLS**.
   - En `supabase/schema.sql`, las políticas `bots_authenticated_all` y
     `conocimiento_authenticated_all` dan acceso total a cualquier
     `authenticated`.
+- **Diseño decidido:**
+  - **El rol se comprueba dentro de cada server action**, no solo en RLS:
+    como las acciones usan la service role, RLS no las frena. RLS se endurece
+    también, pero como defensa en profundidad, no como control principal.
+  - **El rol se lee de `app_metadata`** del usuario de Supabase
+    (`app_metadata.rol === "admin"`), **nunca de `user_metadata`**: este
+    último lo puede modificar el propio usuario desde el cliente con
+    `auth.updateUser`, así que cualquiera podría darse rol admin.
+    `app_metadata` solo se escribe con la service role.
+  - En las acciones, el usuario se obtiene con `supabase.auth.getUser()` (lo
+    valida el servidor de Auth y devuelve el `app_metadata` actual), no con
+    `getSession()`, que lee la cookie sin validarla.
 - **Alcance:**
-  - Fuente del rol: tabla `perfiles` (`user_id`, `rol`) o `app_metadata` de
-    Supabase Auth (no `user_metadata`, que el propio usuario puede editar).
-  - Helper de servidor `exigirAdmin()` que obtiene el usuario de la sesión y
-    comprueba el rol; llamado al principio de cada acción de crear, editar y
-    borrar bots y conocimiento.
-  - Ocultar en la UI los botones de crear/editar/borrar a quien no es admin
-    (solo cosmético: la seguridad está en el servidor).
-  - Endurecer las políticas RLS de `bots` y `conocimiento` para que escribir
-    exija rol admin (defensa en profundidad).
+  - Helper de servidor `exigirAdmin()` en `src/lib/` que obtiene el usuario
+    con `getUser()` y lanza error de autorización si no hay sesión o si
+    `app_metadata.rol` no es `"admin"`. Se llama **al principio** de
+    `createBotAction`, `updateBotAction`, `deleteBotAction` y de las acciones
+    de crear, editar y borrar de `src/lib/actions/conocimiento.ts`, antes de
+    tocar la base de datos.
+  - Ocultar en la UI los botones y páginas de crear/editar/borrar a quien no
+    es admin (solo cosmético: la seguridad está en el servidor).
+  - Migración SQL en `supabase/migrations/` (y reflejo en `schema.sql`) que
+    sustituye `bots_authenticated_all` y `conocimiento_authenticated_all` por:
+    lectura para `authenticated`; escritura solo si
+    `(auth.jwt() -> 'app_metadata' ->> 'rol') = 'admin'`.
+  - Documentar en `DEMO.md` (paso de preparación) **cómo asignar el rol desde
+    el panel de Supabase**:
+    1. Authentication → Users: crear el usuario (como hoy).
+    2. SQL Editor → ejecutar, con el email de ese usuario:
+
+       ```sql
+       update auth.users
+       set raw_app_meta_data =
+         coalesce(raw_app_meta_data, '{}'::jsonb) || '{"rol": "admin"}'::jsonb
+       where email = 'usuario@ejemplo.com';
+       ```
+
+    3. Comprobar con
+       `select email, raw_app_meta_data from auth.users;` que aparece
+       `"rol": "admin"`.
+    4. Cerrar sesión en `/admin` y volver a entrar: el JWT (y por tanto RLS)
+       solo lleva el rol nuevo tras renovar la sesión. Las server actions ya lo
+       ven antes, porque `getUser()` consulta al servidor.
+
+    Alternativa por código, solo desde servidor y nunca desde el navegador:
+    `supabase.auth.admin.updateUserById(id, { app_metadata: { rol: "admin" } })`
+    con la service role.
 - **Qué NO tocar:** las rutas públicas (`/api/chat`, `/api/tts`, `/widget`,
   `/widget-embed`, `/widget.js`), que siguen funcionando sin login; las
-  conversaciones (fuera de alcance salvo decisión expresa); el flujo de login.
-- **Salida esperada:** migración SQL, helper de autorización, acciones
-  protegidas, UI condicionada.
-- **Ficheros / sistemas:** `supabase/schema.sql` (o migración),
-  `src/lib/actions/bots.ts`, `src/lib/actions/conocimiento.ts`, `src/lib/`
-  (helper), páginas y componentes de `src/app/admin/(dashboard)/bots/` y
-  `src/components/admin/`.
+  conversaciones y la generación de la ficha de KOBO-04 (siguen al alcance de
+  cualquier usuario autenticado: no son crear, editar ni borrar bots o
+  conocimiento); el flujo de login; `user_metadata`, que no se lee para nada.
+- **Salida esperada:** helper de autorización, acciones protegidas, UI
+  condicionada, migración RLS, instrucciones en `DEMO.md`.
+- **Ficheros / sistemas:** `src/lib/` (helper), `src/lib/actions/bots.ts`,
+  `src/lib/actions/conocimiento.ts`, páginas y componentes de
+  `src/app/admin/(dashboard)/bots/` y `src/components/admin/`,
+  `supabase/migrations/` y `supabase/schema.sql`, `docs/DEMO.md`.
 - **Criterio de hecho:**
   - Con un usuario sin rol admin: invocar crear/editar/borrar bot o
     conocimiento devuelve error de autorización y la tabla no cambia
     (comprobable en Supabase).
-  - Con un usuario admin: las mismas operaciones funcionan como hoy.
-  - Tests (Vitest) del helper y de al menos una acción por tabla con la sesión
-    mockeada: sin sesión, sin rol admin y con rol admin.
+  - Un usuario que se pone `{"rol": "admin"}` en `user_metadata` (vía
+    `auth.updateUser` desde el navegador) sigue sin poder escribir.
+  - Con un usuario admin asignado según `DEMO.md`: las mismas operaciones
+    funcionan como hoy.
+  - `grep -rn "user_metadata" src` no devuelve ninguna comprobación de rol.
+  - Tests (Vitest) del helper y de al menos una acción por tabla con
+    `getUser()` mockeado: sin sesión, rol solo en `user_metadata`, sin rol y
+    con `app_metadata.rol = "admin"`.
   - `npm run lint` y `npm run build` pasan.
 - **Condición de parada:** si el modelo de roles necesita más de dos niveles o
   roles por bot (multi-tenant real con varios clientes en el mismo panel),
   replanificar: es otra arquitectura.
-- **Dependencias:** KOBO-02.
-- **Riesgos y controles:** quedarse sin ningún admin tras la migración → la
-  migración asigna el rol al usuario de demo de forma explícita y documentada
-  en `DEMO.md`.
-- **Nivel de decisión:** `LEVEL_2_RECOMMENDED` (fuente del rol).
+- **Dependencias:** KOBO-02. Va después de KOBO-04, así que el campo
+  `genera_ficha_oportunidad` del formulario del bot queda protegido por la
+  misma comprobación de `updateBotAction`.
+- **Riesgos y controles:** quedarse sin ningún admin tras la migración → el
+  paso de asignar el rol está en `DEMO.md` y se hace antes de aplicar la
+  migración RLS.
+- **Nivel de decisión:** `LEVEL_1_AUTONOMOUS` (decisiones cerradas por Zabal).
 
 ---
 
@@ -287,3 +408,22 @@ probar un `overrides` en `package.json` en una tarea aparte y verificar con
 `found 0 vulnerabilities`. Las dependencias de producción (`next`, `react`,
 `react-dom`, `@supabase/ssr`, `@supabase/supabase-js`, `openai`, `cookie`) no
 tienen avisos conocidos en esta fecha.
+
+---
+
+## Deuda conocida
+
+### Panel sin aislamiento por tenant
+
+- **Qué pasa:** el panel lee y escribe con la *service role*
+  (`createAdminClient()` en `src/lib/conversaciones.ts` y en
+  `src/lib/actions/`), que se salta RLS. Cualquier usuario autenticado en el
+  panel ve las conversaciones de **todos** los bots. KOBO-05 solo restringe
+  crear, editar y borrar bots y conocimiento; no cambia esto.
+- **Por qué es aceptable hoy:** el único usuario del panel es el equipo de
+  Kobo, que ya debe poder ver todos los bots.
+- **Cuándo deja de serlo:** antes de dar acceso al panel a un cliente. En ese
+  momento hay que aislar por tenant (Fase 3 del dossier): columna `tenant_id`,
+  RLS real que filtre por tenant (sin depender de la service role en las
+  lecturas del panel) y pruebas cross-tenant que demuestren que un usuario de
+  un tenant no ve ni modifica datos de otro.
