@@ -83,55 +83,84 @@ Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
 
 ---
 
-## KOBO-03 — Rate limit simple en memoria para /api/chat y /api/tts
+## KOBO-03 — Rate limit con puerto RateLimiter y adaptador en memoria
 
-- **Objetivo:** limitar peticiones por IP y por `session_id` en `/api/chat` y
-  `/api/tts`, devolviendo `429` cuando se supera el límite.
+- **Objetivo:** limitar peticiones en `/api/chat` y `/api/tts`, con límite
+  principal por `session_id` y secundario por IP, devolviendo `429` cuando se
+  supera.
 - **Razón:** cada petición cuesta dinero en OpenAI. `DEMO.md` ya lista el rate
   limiting como pendiente antes de un piloto público.
+- **Diseño decidido:**
+  - **Puerto `RateLimiter`.** Las rutas solo conocen una interfaz, por ejemplo
+    `consumir(clave, limite, ventanaMs) → Promise<{ permitido, reintentarEnSegundos }>`.
+    Es asíncrona para que un adaptador remoto (Redis/Upstash, Postgres) encaje
+    sin cambiar la firma.
+  - **Adaptador en memoria** como única implementación en esta tarea. Se elige
+    el adaptador en un solo sitio (p. ej. `src/lib/rateLimit/index.ts`); las
+    rutas no lo importan directamente.
+  - **Claves con `bot_id`**, para que dos tenants nunca compartan contador:
+    `<bot_id>:sesion:<session_id>` (límite principal) y `<bot_id>:ip:<ip>`
+    (límite secundario, más holgado, contra quien rota `session_id`).
+  - **Orden en la ruta:** parsear y validar la entrada (JSON, campos, UUID) →
+    rate limit (sesión y luego IP) → buscar bot → OpenAI. Las peticiones
+    inválidas se rechazan antes y no cuestan nada.
+  - **`/api/tts` recibe `bot_id` y `session_id`.** El widget hoy solo envía
+    `{ texto }`; pasará a enviar también `bot_id` y `session_id` (el `bot_id`
+    hace falta porque forma parte de la clave). `/api/tts` valida ambos como
+    UUID y protege `request.json()` igual que `/api/chat` (hoy un JSON
+    inválido da `500`).
 - **Alcance:**
-  - Un módulo pequeño (p. ej. `src/lib/rateLimit.ts`) de ventana fija o
-    deslizante, configurable por límite y ventana.
-  - Aplicarlo en `/api/chat` (clave IP y clave `session_id`) y en `/api/tts`.
+  - Puerto `RateLimiter`, adaptador en memoria y punto único de selección.
+  - Aplicarlo en `/api/chat` y `/api/tts` con las claves de arriba.
+  - Cambio en el cliente: `useChatSession` expone `sessionId` y `ChatWidget`
+    lo envía, junto con `botId`, en la llamada a `/api/tts`.
   - Respuesta `429` con mensaje en español y cabecera `Retry-After`.
-  - Tests con Vitest (temporizadores falsos): por debajo del límite pasa,
-    al superarlo `429`, tras la ventana vuelve a pasar; IP y `session_id`
-    cuentan por separado.
-  - Documentar en `docs/` (o en el propio módulo) que **un limitador en
-    memoria no sirve con varias instancias ni en serverless**: cada instancia
-    tiene su propio contador y se reinicia en cada despliegue. Para producción
-    hace falta un almacén compartido (Redis/Upstash, tabla en Postgres…).
-- **Decisiones abiertas (antes de implementar):**
-  - `/api/tts` **no recibe hoy `session_id`**: el widget solo envía `{ texto }`
-    (`src/components/chat/ChatWidget.tsx`). Limitar por sesión en TTS obliga a
-    cambiar el cliente para enviarlo. Alternativa: en TTS, solo por IP.
-  - La IP sale de `x-forwarded-for`, que el cliente puede falsificar si no hay
-    un proxy de confianza delante. Aceptable en demo; documentarlo.
-  - `CLAUDE.md` prohíbe guardar estado por cliente en variables de módulo.
-    Los contadores de rate limit no son configuración de cliente, pero sí son
-    estado de módulo: decidir si la clave incluye `bot_id` para que un tenant
-    no agote el cupo de otro, y dejar escrita la excepción.
-- **Qué NO tocar:** la lógica de validación existente de `/api/chat` (sigue
-  igual y se ejecuta antes o después del limitador según se decida, pero no
-  se reescribe); Supabase; dependencias externas de rate limit (nada de
-  Redis en esta tarea).
-- **Salida esperada:** módulo de rate limit, dos rutas que lo usan, tests,
-  nota de limitaciones.
-- **Ficheros / sistemas:** `src/lib/` (nuevo), `src/app/api/chat/route.ts`,
-  `src/app/api/tts/route.ts`, tests; `ChatWidget.tsx` solo si se decide
-  enviar `session_id` a TTS.
+  - Límites y ventanas configurables por variable de entorno, con valores por
+    defecto holgados para no romper la demo en directo.
+  - Tests con Vitest (temporizadores falsos): por debajo del límite pasa; al
+    superarlo, `429`; tras la ventana vuelve a pasar; el mismo `session_id` en
+    dos bots distintos lleva contadores separados; el límite por IP salta
+    aunque cambie el `session_id`.
+  - Documentación en el repo (en `docs/` y en el propio módulo):
+    - **El adaptador en memoria no sirve con varias instancias ni en
+      serverless:** cada instancia tiene su propio contador y se reinicia en
+      cada despliegue. Para producción se escribe otro adaptador del puerto
+      `RateLimiter` (almacén compartido) y se cambia en el punto único de
+      selección, **sin tocar las rutas**.
+    - **La IP de `x-forwarded-for` solo es fiable detrás de un proxy de
+      confianza** que sobrescriba esa cabecera. Sin él, el cliente la puede
+      falsificar; por eso la IP es el límite secundario y no el principal.
+    - El adaptador en memoria guarda estado a nivel de módulo. Es una excepción
+      acotada a la regla de `CLAUDE.md`: no contiene configuración ni
+      credenciales de ningún cliente, y los contadores van separados por
+      `bot_id`.
+- **Qué NO tocar:** las validaciones existentes de `/api/chat` (se mantienen
+  tal cual, el limitador va detrás); Supabase; ninguna dependencia externa de
+  rate limit (nada de Redis en esta tarea); el resto del comportamiento del
+  widget.
+- **Salida esperada:** puerto y adaptador, dos rutas que lo usan, cliente que
+  envía `bot_id` y `session_id` a TTS, tests y nota de limitaciones.
+- **Ficheros / sistemas:** `src/lib/rateLimit/` (nuevo),
+  `src/app/api/chat/route.ts`, `src/app/api/tts/route.ts`,
+  `src/components/chat/useChatSession.ts`,
+  `src/components/chat/ChatWidget.tsx`, tests, `.env.example` (límites).
 - **Criterio de hecho:**
-  - `npm test` pasa e incluye los casos de rate limit de ambas rutas.
-  - Con `npm run dev`, un bucle de peticiones a `/api/chat` por encima del
-    límite recibe `429` (comprobable con `curl` en bucle).
-  - La limitación multiinstancia está escrita en el repo.
+  - `npm test` pasa e incluye los casos de rate limit de ambas rutas y del
+    adaptador.
+  - Con `npm run dev`, un bucle de `curl` a `/api/chat` con el mismo
+    `session_id` por encima del límite recibe `429` con `Retry-After`.
+  - En el navegador, el botón de escuchar del widget sigue funcionando y la
+    petición a `/api/tts` lleva `bot_id` y `session_id`.
+  - Las rutas no importan el adaptador en memoria (comprobable con
+    `grep -rn "memoria" src/app/api` o el nombre que se le dé).
+  - Las tres notas de documentación están escritas en el repo.
   - `npm run lint` y `npm run build` pasan.
-- **Condición de parada:** si se decide que hace falta almacén compartido ya,
-  es otra tarea (cambia arquitectura y coste).
+- **Condición de parada:** si hace falta almacén compartido ya (despliegue con
+  varias instancias), es otra tarea: un adaptador nuevo, no un cambio de rutas.
 - **Dependencias:** KOBO-02 (Vitest y mocks).
-- **Riesgos y controles:** limitar demasiado rompe la demo en directo → límites
-  por variable de entorno con valores por defecto holgados.
-- **Nivel de decisión:** `LEVEL_2_RECOMMENDED` (por las decisiones abiertas).
+- **Riesgos y controles:** limitar demasiado rompe la demo → valores por
+  defecto holgados y configurables.
+- **Nivel de decisión:** `LEVEL_1_AUTONOMOUS` (decisiones cerradas por Zabal).
 
 ---
 
