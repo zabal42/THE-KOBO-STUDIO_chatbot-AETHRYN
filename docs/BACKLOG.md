@@ -166,59 +166,92 @@ Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
 
 ## KOBO-04 — Ficha de oportunidad del lead
 
-- **Objetivo:** a partir de una conversación del bot de Kobo, generar un
-  resumen estructurado del lead (problema, sector, integraciones, plazo,
-  contacto si lo dio) y mostrarlo en `/admin/conversaciones/[id]`.
+- **Objetivo:** a partir de una conversación de un bot que tenga la ficha
+  activada (en la demo, Kobo), generar un resumen estructurado del lead
+  (problema, sector, integraciones, plazo, contacto si lo dio) y mostrarlo en
+  `/admin/conversaciones/[id]`.
 - **Razón:** convertir conversaciones en oportunidades comerciales legibles
   sin leer el chat entero. Es el primer paso hacia la "ficha del cliente" del
   Harness.
+- **Diseño decidido:**
+  - **Bajo demanda.** La ficha se genera al pulsar un botón "Generar ficha"
+    (o "Regenerar ficha" si ya existe) en `/admin/conversaciones/[id]`. Sin
+    cron y sin detección de inactividad: el chat web no tiene evento de cierre
+    y el cron se retiró a propósito del proyecto.
+  - **Activación por bot** con una columna nueva en `bots`:
+    `genera_ficha_oportunidad boolean not null default false`. Nada de fijar
+    el id del bot de Kobo en el código (regla multi-tenant). En la demo:
+    **activada en Kobo, desactivada en Bea**.
+  - **El código confirma.** La server action de generar comprueba en servidor
+    que el bot de la conversación tiene la columna a `true` antes de llamar a
+    OpenAI; ocultar el botón en la UI es solo cosmético.
 - **Alcance:**
-  - Esquema fijo de la ficha: `problema`, `sector`, `integraciones` (lista),
-    `plazo`, `contacto` (nombre/email/teléfono) — cada campo puede ser `null`.
-  - Generación con OpenAI usando salida estructurada (JSON con esquema) y
-    **validación en código** del resultado antes de guardarlo.
-  - Persistencia en una tabla nueva (p. ej. `fichas_oportunidad`, 1:1 con
-    `conversaciones`) con RLS como el resto del esquema.
-  - Sección "Ficha de oportunidad" en la página de detalle de la conversación.
-- **Decisiones abiertas (antes de implementar):**
-  - **Qué es "el final de una conversación".** El chat web no tiene evento de
-    cierre. Propuesta: generar la ficha **bajo demanda** desde el panel
-    (botón "Generar / regenerar ficha"); alternativa: por inactividad, que
-    requiere cron, retirado a propósito del proyecto.
-  - **Qué bot es "el de Kobo".** No se puede fijar por id en el código (regla
-    multi-tenant). Propuesta: una columna por bot (p. ej. `genera_ficha
-    boolean`) editable en `/admin/bots`.
-  - **Datos personales.** El contacto es dato personal: decidir retención y
-    mencionarlo en la política de privacidad pendiente.
+  - **Base de datos:**
+    - Migración SQL `supabase/migrations/<fecha>_genera_ficha_oportunidad.sql`
+      (carpeta nueva) con
+      `alter table public.bots add column if not exists genera_ficha_oportunidad boolean not null default false;`
+      y la tabla de fichas (abajo), para bases ya creadas.
+    - Reflejar la columna y la tabla en `supabase/schema.sql`, para que una
+      instalación nueva siguiendo `DEMO.md` (schema → seed) funcione sin pasos
+      extra.
+    - `supabase/seed-demo.sql`: añadir `genera_ficha_oportunidad` a la lista
+      de columnas y al `on conflict … do update` de ambos bots, con `true` en
+      Kobo (`…0001`) y `false` en Bea (`…0002`).
+    - Tabla nueva `fichas_oportunidad` (1:1 con `conversaciones`) con RLS como
+      el resto del esquema.
+  - **Ficha:** esquema fijo `problema`, `sector`, `integraciones` (lista),
+    `plazo`, `contacto` (nombre/email/teléfono); cada campo puede ser `null`.
+    Generación con OpenAI usando salida estructurada (JSON con esquema) y
+    **validación en código** antes de guardar.
+  - **Panel:**
+    - Botón y sección "Ficha de oportunidad" en la página de detalle de la
+      conversación, visibles solo si el bot tiene la ficha activada.
+    - Campo "Generar ficha de oportunidad" en el formulario del bot
+      (`BotForm.tsx` + `leerCamposBot` en `src/lib/actions/bots.ts`), para no
+      depender del SQL Editor.
+  - Tipos actualizados en `src/types/index.ts`.
 - **Qué NO tocar:** el flujo de `/api/chat` (la ficha no se genera en la ruta
-  pública ni alarga la respuesta al usuario); el bot de Bea; ninguna
-  integración externa (CRM, email, WhatsApp). La ficha no dispara ningún
-  efecto secundario.
+  pública ni alarga la respuesta al usuario); el contenido de Bea; ninguna
+  integración externa (CRM, email, WhatsApp); ningún cron. La ficha no dispara
+  ningún efecto secundario fuera de guardarse.
 - **Regla de producto aplicable:** "nunca afirmar lo que no se ha obtenido".
   Si el usuario no dio contacto, el campo queda `null`, nunca se inventa.
   Si la llamada a OpenAI falla, la página lo dice ("no se ha podido generar la
   ficha"), no muestra una ficha vacía como si fuera real.
-- **Salida esperada:** migración SQL, función de generación + validación,
-  sección en la página de detalle.
-- **Ficheros / sistemas:** `supabase/schema.sql` (o migración), `src/lib/`
-  (nuevo), `src/types/index.ts`,
-  `src/app/admin/(dashboard)/conversaciones/[id]/page.tsx`, posiblemente
-  `BotForm.tsx` y `src/lib/actions/bots.ts` si se añade la columna por bot.
+- **Salida esperada:** migración SQL, `schema.sql` y `seed-demo.sql`
+  actualizados, función de generación + validación, server action, botón y
+  sección en la página de detalle, campo en el formulario del bot.
+- **Ficheros / sistemas:** `supabase/migrations/` (nuevo),
+  `supabase/schema.sql`, `supabase/seed-demo.sql`, `src/lib/` (nuevo),
+  `src/lib/actions/` (acción de generar), `src/lib/actions/bots.ts`,
+  `src/components/admin/BotForm.tsx`, `src/types/index.ts`,
+  `src/app/admin/(dashboard)/conversaciones/[id]/page.tsx`.
 - **Criterio de hecho:**
-  - Con la demo (`seed-demo.sql`), tras el guion del Acto 1 de `DEMO.md`, la
-    página de la conversación muestra una ficha con problema y sector
-    rellenos y el contacto ficticio dado.
+  - En un Supabase recién montado con `DEMO.md`, `select nombre,
+    genera_ficha_oportunidad from bots;` devuelve `true` para Kobo y `false`
+    para Bea. Relanzar `seed-demo.sql` no cambia el resultado.
+  - Tras el guion del Acto 1 de `DEMO.md`, pulsar "Generar ficha" en la
+    conversación de Kobo muestra una ficha con problema y sector rellenos y el
+    contacto ficticio dado.
+  - En una conversación de Bea no aparece el botón, y llamar a la acción
+    directamente con ese id devuelve error sin llamar a OpenAI.
   - Una conversación en la que no se da contacto muestra `contacto` vacío.
-  - Tests (Vitest) de la validación: JSON incompleto o con tipos erróneos se
-    rechaza; OpenAI mockeado.
+  - Tests (Vitest): validación de la ficha (JSON incompleto o con tipos
+    erróneos se rechaza) y rechazo de la acción para bots sin la columna
+    activa; OpenAI y Supabase mockeados.
   - Fallo simulado de OpenAI → mensaje explícito en la página.
   - `npm run lint` y `npm run build` pasan.
-- **Condición de parada:** si se elige generación automática por inactividad
-  (reintroduce cron), escalar: `CLAUDE.md` exige tarea explícita.
-- **Dependencias:** KOBO-02. Recomendable después de KOBO-05.
-- **Riesgos y controles:** coste por generación → solo bajo demanda y solo en
-  bots con la opción activa.
-- **Nivel de decisión:** `LEVEL_2_RECOMMENDED`.
+- **Condición de parada:** cualquier propuesta de generación automática
+  (inactividad, cron, al cerrar el widget) queda fuera: tarea aparte y
+  explícita, como exige `CLAUDE.md`.
+- **Dependencias:** KOBO-02.
+- **Riesgos y controles:**
+  - Coste por generación → solo bajo demanda y solo en bots con la columna
+    activa.
+  - El contacto es dato personal: la ficha lo hereda de la conversación, que
+    ya lo guarda. Su retención entra en la política de privacidad pendiente
+    (`DEMO.md` §4); no bloquea esta tarea en la demo con datos ficticios.
+- **Nivel de decisión:** `LEVEL_1_AUTONOMOUS` (decisiones cerradas por Zabal).
 
 ---
 
