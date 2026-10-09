@@ -45,11 +45,10 @@ say so explicitly (see §9).
 
 ---
 # 1. ShapingTheAxe — framework (governs how all material work is done)
-Before material work, read and follow `STA/ShapingTheAxe.md`.
-`STA/SHAPING_THE_AXE_BRAIN_SPEC.md` is the semantic authority.
-Use `STA/prompts/activate.md` for the activation receipt and fallback behavior.
-Use the minimum preparation justified by risk; do not add universal approval gates.
-If a required file is unavailable, say so instead of claiming activation.
+
+The STA routing lives in the marked block at the end of this file. That block
+is managed by the `sta-kit` installer (https://github.com/zabal42/sta-kit): do
+not edit it by hand; re-run the installer to update it.
 
 
 # 2. Capability routing
@@ -137,7 +136,7 @@ Do not introduce universal approval gates.
 
 Do not perform destructive operations without explicit authorization.
 
-Do not load anything under `incubator/`
+Do not load anything under `STA/incubator/`
 unless the user explicitly authorizes a controlled evaluation.
 
 ---
@@ -209,3 +208,13 @@ Document:
 ---
 
 @AGENTS.md
+<!-- STA:BEGIN (lo gestiona install.sh: no lo edites a mano) -->
+# ShapingTheAxe routing for CLAUDE.md
+
+Before material work, read and follow `STA/ShapingTheAxe.md`.
+`STA/SHAPING_THE_AXE_BRAIN_SPEC.md` is the semantic authority.
+Use `STA/prompts/activate.md` for the activation receipt and fallback behavior.
+Use the minimum preparation justified by risk; do not add universal approval gates.
+Do not load anything under `STA/incubator/` unless the user explicitly authorizes a controlled evaluation.
+If a required file is unavailable, say so instead of claiming activation.
+<!-- STA:END -->
