@@ -11,6 +11,8 @@ export default defineConfig({
   test: {
     // Solo hay tests de servidor (lógica pura y rutas API): no hace falta DOM.
     environment: "node",
+    // Lista cada caso por nombre (criterio de hecho de KOBO-02).
+    reporters: ["verbose"],
     include: ["src/**/*.test.ts"],
     // Los mocks se declaran por fichero; se limpian entre tests.
     clearMocks: true,
