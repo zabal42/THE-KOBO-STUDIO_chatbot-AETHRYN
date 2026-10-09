@@ -241,3 +241,49 @@ Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
   en `DEMO.md`.
 - **Nivel de decisión:** `LEVEL_2_RECOMMENDED` (fuente del rol).
 
+---
+
+## Dependencias
+
+Resultado de `npm audit` ejecutado el 2026-10-09 sobre `package-lock.json` de
+`main` (`c2bbbf1`), tras `npm ci`, con npm 10.9.4 y Node 22.22.0. **No se ha
+aplicado ningún arreglo.**
+
+### `npm audit` (producción + desarrollo)
+
+**5 vulnerabilidades de severidad alta**, todas la misma cadena y todas de
+**desarrollo**:
+
+| Paquete | Versión instalada | ¿Directo? | Tipo | Severidad |
+| --- | --- | --- | --- | --- |
+| `eslint-config-next` | 16.4.0 | Sí (`devDependencies`) | desarrollo | alta |
+| `@next/eslint-plugin-next` | 16.4.0 | No | desarrollo | alta |
+| `fast-glob` | 3.3.1 | No | desarrollo | alta |
+| `micromatch` | 4.0.8 | No | desarrollo | alta |
+| `braces` | 3.0.3 | No | desarrollo | alta |
+
+Cadena: `eslint-config-next@16.4.0` → `@next/eslint-plugin-next@16.4.0` →
+`fast-glob@3.3.1` → `micromatch@4.0.8` → `braces@3.0.3`.
+
+Origen: `braces`, aviso
+[GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm)
+(denegación de servicio por agotamiento de pila con patrones muy anidados).
+Los otros cuatro aparecen solo por depender de él.
+
+**Arreglo que propone npm:** `npm audit fix --force`, que instalaría
+`eslint-config-next@14.2.35` (cambio de versión mayor, *breaking change*).
+
+Valoración: ese "arreglo" es un **downgrade de dos versiones mayores** de la
+configuración de ESLint de Next (16 → 14) en un proyecto con Next 16; lo más
+probable es que rompa `npm run lint`. No se recomienda aplicarlo. El código
+vulnerable solo se ejecuta al lanzar ESLint en local o en CI, con patrones de
+glob controlados por el propio proyecto, no en la app servida. Opción razonable:
+esperar a una versión de `eslint-config-next` que actualice `fast-glob`, o
+probar un `overrides` en `package.json` en una tarea aparte y verificar con
+`npm run lint`.
+
+### `npm audit --omit=dev` (solo producción)
+
+`found 0 vulnerabilities`. Las dependencias de producción (`next`, `react`,
+`react-dom`, `@supabase/ssr`, `@supabase/supabase-js`, `openai`, `cookie`) no
+tienen avisos conocidos en esta fecha.
