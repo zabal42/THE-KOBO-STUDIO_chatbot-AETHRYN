@@ -692,3 +692,74 @@ Para KOBO-RF se ejecutó `npm test` el 2026-10-09 sobre `main` (`4928b66`):
 a RF-24), 3 con test parcial (RF-04, RF-08, RF-18) y 13 solo con lectura de
 código. Todo lo que toca el navegador, el panel y Supabase real está sin test
 automático: por eso existe la [§10](#10-verificación-manual).
+
+---
+
+## 6. Requisitos funcionales planificados
+
+Uno por tarea de [`docs/BACKLOG.md`](BACKLOG.md). El detalle (alcance, qué no
+tocar, criterio de hecho completo) está allí; aquí va el requisito resumido.
+
+### Estado de las tareas del BACKLOG
+
+| Tarea | Estado en `main` (`4928b66`) | Dónde está |
+| --- | --- | --- |
+| KOBO-02 — Tests mínimos con Vitest | **Hecha** (commit `f5aec9c`) | Base de las evidencias de test de la §5 |
+| KOBO-04 — Ficha de oportunidad | **Hecha** (commit `4928b66`) | RF-18 a RF-24 |
+| KOBO-03 — Rate limit | Pendiente | RFP-KOBO-03 |
+| KOBO-05 — Panel por roles | Pendiente | RFP-KOBO-05 |
+| KOBO-06 — Puerto LLM | Pendiente (añadida en KOBO-RF) | RFP-KOBO-06 |
+
+Nota: `docs/BACKLOG.md` todavía describe KOBO-02 y KOBO-04 como tareas
+abiertas; no marca cuáles están hechas.
+
+#### RFP-KOBO-03 — Rate limit con puerto `RateLimiter`
+
+- **Actor:** sistema (frente a visitantes y clientes HTTP).
+- **Descripción:** limitar las peticiones a `/api/chat` y `/api/tts`, con
+  límite principal por `session_id` y secundario, más holgado, por IP; claves
+  separadas por `bot_id`. Al superarlo, `429` con mensaje en español y
+  cabecera `Retry-After`. Las rutas hablan con un puerto `RateLimiter`; la
+  primera implementación es un adaptador en memoria. `/api/tts` pasará a
+  recibir y validar `bot_id` y `session_id`, y a proteger `request.json()`.
+- **Criterio de aceptación:** un bucle de peticiones con el mismo
+  `session_id` recibe `429` con `Retry-After`; el mismo `session_id` en dos
+  bots lleva contadores separados; tests con temporizadores falsos.
+- **Limitación ya asumida:** el adaptador en memoria no sirve con varias
+  instancias ni en serverless; producción necesitará otro adaptador.
+- **Dependencias:** KOBO-02 (hecha).
+
+#### RFP-KOBO-05 — Panel por roles
+
+- **Actor:** administrador por rol / usuario del panel.
+- **Descripción:** solo usuarios con `app_metadata.rol === "admin"` pueden
+  crear, editar o borrar bots y conocimiento. La comprobación va **dentro de
+  cada server action** (helper `exigirAdmin()` con `getUser()`), porque las
+  acciones usan la service role y RLS no las frena. RLS se endurece como
+  defensa en profundidad. Nunca se lee el rol de `user_metadata`.
+- **Criterio de aceptación:** un usuario sin rol admin recibe error de
+  autorización y las tablas no cambian; ponerse el rol en `user_metadata` no
+  sirve; un admin trabaja como hoy.
+- **No cambia:** conversaciones y fichas siguen al alcance de cualquier
+  usuario autenticado; el aislamiento por cliente es otra tarea (ver §11).
+- **Dependencias:** KOBO-02 (hecha); va después de KOBO-04 (hecha).
+
+#### RFP-KOBO-06 — Puerto LLM con adaptadores OpenAI y Anthropic
+
+- **Actor:** usuario del panel (elige el modelo de cada bot); sistema.
+- **Descripción:** el modelo de lenguaje pasa a estar detrás de un puerto
+  propio (`ModeloLenguaje`) con dos operaciones: conversar en streaming (para
+  `/api/chat`) y extraer JSON con esquema (para la ficha). Dos adaptadores:
+  OpenAI (el comportamiento de hoy) y Anthropic. El proveedor y el modelo se
+  eligen **por bot** desde el panel, con **Claude como modelo por defecto
+  previsto**. La salida de cualquier proveedor sigue pasando por la validación
+  en código de la ficha.
+- **Voz:** **Anthropic no ofrece texto a voz**, así que `/api/tts` seguirá
+  necesitando un proveedor con TTS (hoy OpenAI) y su clave, aunque todos los
+  bots conversen con Claude.
+- **Criterio de aceptación:** las rutas no importan ningún SDK de proveedor;
+  un bot con Anthropic y otro con OpenAI responden en streaming en `/widget`;
+  la ficha funciona con ambos; un fallo del proveedor se ve.
+- **Decisión pendiente (Zabal):** modelo Claude concreto y si el chat usa uno
+  más barato que la ficha; prioridad de la tarea en el orden del BACKLOG.
+- **Dependencias:** KOBO-02 (hecha); recomendable después de KOBO-03.
