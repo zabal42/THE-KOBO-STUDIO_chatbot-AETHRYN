@@ -136,7 +136,7 @@ Do not introduce universal approval gates.
 
 Do not perform destructive operations without explicit authorization.
 
-Do not load anything under `incubator/`
+Do not load anything under `STA/incubator/`
 unless the user explicitly authorizes a controlled evaluation.
 
 ---
