@@ -5,6 +5,10 @@ export interface ConversacionConBot extends Conversacion {
   bots: Pick<Bot, "nombre"> | null;
 }
 
+export interface ConversacionDetalle extends Conversacion {
+  bots: Pick<Bot, "nombre" | "genera_ficha_oportunidad"> | null;
+}
+
 export async function getConversaciones(botId?: string) {
   const supabase = createAdminClient();
 
@@ -33,9 +37,9 @@ export async function getConversacion(id: string) {
 
   const { data, error } = await supabase
     .from("conversaciones")
-    .select("*, bots(nombre)")
+    .select("*, bots(nombre, genera_ficha_oportunidad)")
     .eq("id", id)
-    .maybeSingle<ConversacionConBot>();
+    .maybeSingle<ConversacionDetalle>();
 
   if (error) {
     throw new Error(`No se pudo obtener la conversación: ${error.message}`);
