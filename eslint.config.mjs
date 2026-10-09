@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Herramientas locales del entorno de desarrollo, ajenas al proyecto.
     ".claude/**",
+    // Web estática de The Kobo Studio: no forma parte del backend.
+    "web/**",
   ]),
 ]);
 
