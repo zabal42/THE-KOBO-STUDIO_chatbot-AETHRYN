@@ -763,3 +763,240 @@ abiertas; no marca cuáles están hechas.
 - **Decisión pendiente (Zabal):** modelo Claude concreto y si el chat usa uno
   más barato que la ficha; prioridad de la tarea en el orden del BACKLOG.
 - **Dependencias:** KOBO-02 (hecha); recomendable después de KOBO-03.
+
+---
+
+## 7. Requisitos no funcionales
+
+Cada apartado separa **lo que hay** (con evidencia) de **lo que falta**.
+
+### 7.1 Seguridad
+
+**Lo que hay:**
+
+- **Validación de entrada en `/api/chat`** antes de gastar nada (RF-07).
+- **La service role solo vive en servidor:** se lee de
+  `SUPABASE_SERVICE_ROLE_KEY`, sin prefijo `NEXT_PUBLIC_`, así que Next no la
+  envía al navegador (`src/lib/supabase/admin.ts:3-14`).
+- **`/admin/*` exige sesión**, validada con `getUser()` contra el servidor de
+  Auth (`src/proxy.ts:7-9`).
+- **La acción de la ficha se defiende sola** (RF-23), con test.
+- **Cookies del panel solo de sesión** (`src/lib/supabase/cookies.ts:8-13`).
+- **RLS activado en todas las tablas** (`supabase/schema.sql:23`, `43`, `68`,
+  `94`, `121`).
+- **El HTML de los mensajes se escapa** antes de pintarlo (RF-10).
+- **La ficha trata la conversación como datos**, no como órdenes
+  (`src/lib/fichaOportunidad.ts:60`), y el contacto se confirma en código
+  (RF-22).
+
+**Lo que falta (o es débil), comprobado en el código:**
+
+- **Sin rate limit** en `/api/chat` ni `/api/tts` → KOBO-03.
+- **Sin roles:** cualquier usuario de Supabase Auth administra todo → KOBO-05.
+- **Las acciones de bots y conocimiento no comprueban la sesión por sí
+  mismas** (`src/lib/actions/bots.ts:22-60`,
+  `src/lib/actions/conocimiento.ts:14-66`); dependen solo de `src/proxy.ts`.
+  La ficha (KOBO-04) ya sigue el patrón correcto; KOBO-05 lo extiende.
+- **Las políticas RLS permiten a `anon` insertar conversaciones y mensajes**
+  (`supabase/schema.sql:51-55` y `76-80`). La clave anónima es pública (va al
+  navegador para el login), así que cualquiera podría escribir directamente en
+  esas tablas saltándose las validaciones de `/api/chat`. El código actual no
+  usa esa vía: escribe con la service role (`src/lib/bot.ts:31`, `132`).
+  Parece herencia de Zorion Chat; conviene revisarlo en KOBO-05.
+- **`/api/tts` no valida bot ni sesión** y da 500 con un cuerpo no JSON
+  (`src/app/api/tts/route.ts:5`) → KOBO-03 lo recoge.
+- **El widget se puede incrustar en cualquier web y para cualquier bot**:
+  `frame-ancestors *` (`next.config.ts:10-16`) y no hay lista de dominios
+  permitidos por bot. Cualquiera que conozca el id de un bot puede ponerlo en
+  su web y gastar a cuenta de ese bot.
+- **Inyección de instrucciones en el chat:** la única defensa es el propio
+  prompt (`src/lib/bot.ts:104`). Un visitante puede intentar que el bot se
+  salga de su papel. Hoy el chat no dispara ningún efecto secundario, así que
+  el daño posible es la respuesta en sí.
+- **Fallo de Supabase leído como "no existe":** si la consulta del bot falla,
+  `buscarBotActivoPorId` devuelve `null` sin mirar el error
+  (`src/lib/bot.ts:16-23`) y la API responde `404 "Bot no encontrado"`. Choca
+  con la regla de `CLAUDE.md` "un fallo no es un resultado vacío". Lo mismo
+  pasa en `obtenerHistorial` y `obtenerConocimientoActivo`
+  (`src/lib/bot.ts:62-83`): si fallan, el bot responde **sin historial o sin
+  conocimiento** y sin avisar.
+
+### 7.2 Privacidad y datos personales
+
+**Qué datos se tratan hoy:**
+
+- Todo lo que el visitante escribe se guarda en `mensajes`, sin caducidad
+  (`src/lib/bot.ts:127-145`). Puede incluir nombre, email o teléfono: el
+  guion de Kobo los pide (`supabase/seed-demo.sql:25`).
+- La ficha copia el contacto a `fichas_oportunidad`
+  (`supabase/schema.sql:114-116`).
+- Cada mensaje (con el historial y el conocimiento) se envía a **OpenAI** para
+  responder, y el texto de las respuestas se envía otra vez si se pide la voz.
+- No se guarda IP ni datos del navegador: la conversación solo lleva un UUID
+  aleatorio (`src/lib/bot.ts:45-49`).
+
+**Lo que falta antes de tratar datos reales** (ya listado en `docs/DEMO.md`
+§4): aviso de privacidad y consentimiento en el widget (hoy no hay ningún
+texto legal), política de retención y borrado, contratos de encargo de
+tratamiento con Supabase y OpenAI, y revisión de las transferencias
+internacionales que implique la región de cada proveedor.
+
+**Bea y los datos de salud.** Cuando Bea deje de ser demo tratará datos de
+salud (embarazo, síntomas, estado emocional), que son **categoría especial
+del artículo 9 del RGPD**. Eso exige, como mínimo, una base legal válida para
+categoría especial (normalmente consentimiento explícito), una evaluación de
+impacto, minimización real de datos, control de acceso por roles y por
+tenant, y decidir qué se guarda y cuánto tiempo. Hoy **ninguna de esas
+garantías está implementada**; por eso Bea solo se usa con contenido y
+conversaciones ficticias. Lo único que hay es la instrucción a Bea de no
+pedir datos innecesarios (`supabase/seed-demo.sql:72`), que es una
+instrucción al modelo, no un control. Esto no es un análisis jurídico: la
+versión real necesita asesoría legal.
+
+### 7.3 Costes y límites
+
+| Límite | Valor | Evidencia |
+| --- | --- | --- |
+| Longitud del mensaje | 2000 caracteres (`413` si se supera) | `src/app/api/chat/route.ts:12`, `41-46` |
+| Respuesta máxima del chat | 800 tokens | `src/app/api/chat/route.ts:72` |
+| Historial enviado | 20 mensajes | `src/lib/bot.ts:11` |
+| Conocimiento enviado | **Todo** el activo del bot, en cada mensaje | `src/lib/bot.ts:73-84` |
+| Ficha | Bajo demanda, 600 tokens, temperatura 0, solo bots activados | `src/lib/fichaOportunidad.ts:211-227` |
+| Voz | Hasta 2000 caracteres por petición; caché en el navegador por mensaje | `src/app/api/tts/route.ts:7`, `src/components/chat/ChatWidget.tsx:136-142` |
+| Peticiones por minuto | **Sin límite** | KOBO-03 |
+
+Cada mensaje de chat es una llamada a OpenAI; cada clic en "escuchar" (la
+primera vez) es otra; cada "Generar ficha", otra. El coste crece con el
+tamaño del conocimiento, que se envía entero siempre. Control actual: el
+límite de gasto que se ponga en la cuenta de OpenAI (`docs/DEMO.md` §1, paso
+2). No hay medición de tokens ni de coste en el código.
+
+### 7.4 Rendimiento
+
+- **Streaming:** el visitante ve texto en cuanto llega el primer fragmento
+  (RF-02).
+- Antes del primer fragmento hay varias consultas a Supabase **en serie**
+  (bot → conversación → historial y conocimiento en paralelo → guardar
+  mensaje) y luego la llamada a OpenAI (`src/app/api/chat/route.ts:52-73`,
+  paralelo en `src/lib/bot.ts:115-118`).
+- Índices en las claves ajenas (`supabase/schema.sql:132-135`).
+- **No hay ninguna medición de tiempos** en el repositorio. No se afirma
+  ninguna latencia.
+- En build de producción, `/admin/bots` sale estática y no vería cambios
+  hechos fuera del panel (deuda ya documentada en `docs/BACKLOG.md`).
+
+### 7.5 Despliegue y entorno
+
+- **Stack:** Next.js 16, React 19, Supabase, OpenAI, Tailwind 4, TypeScript 5
+  (`package.json`). Tests con Vitest 4 (`vitest.config.mts`).
+- **Dependencias de npm público:** las 506 entradas `resolved` de
+  `package-lock.json` apuntan a `registry.npmjs.org` (comprobado para este
+  documento); no hay paquetes privados. Resultado de `npm audit`: ver
+  `docs/BACKLOG.md`, sección "Dependencias" (5 avisos altos, todos de
+  desarrollo; 0 en producción).
+- **Variables de entorno** (plantilla en `.env.example`):
+
+  | Variable | Para qué | Pública |
+  | --- | --- | --- |
+  | `NEXT_PUBLIC_SUPABASE_URL` | URL del proyecto Supabase | Sí (va al navegador) |
+  | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Clave anónima (login del panel) | Sí |
+  | `SUPABASE_SERVICE_ROLE_KEY` | Acceso total en servidor | **No** |
+  | `OPENAI_API_KEY` | Chat, ficha y voz | **No** |
+  | `NEXT_PUBLIC_DEMO_BOT_ID` | Bot por defecto de la sala de demos | Sí |
+  | `OPENAI_MODEL` | Modelo de chat y ficha (por defecto `gpt-4o`) | No. **No está en `.env.example`**: solo se ve leyendo el código (`src/app/api/chat/route.ts:13`, `src/lib/fichaOportunidad.ts:14`). |
+
+- **Sin claves en el repo:** `.gitignore` ignora `.env*` salvo `.env.example`,
+  y el único fichero de entorno versionado es `.env.example`, vacío. Para este
+  documento se buscaron en el repo patrones de clave de OpenAI (`sk-…`) y de
+  JWT de Supabase (`eyJ…`): ninguna coincidencia.
+- **Entorno de la demo:** ordenador personal, proyecto Supabase nuevo de Kobo,
+  clave de OpenAI de Kobo con límite de gasto, `python3` para `npm run web`
+  (`docs/DEMO.md`). La web de ejemplo carga el widget desde
+  `http://localhost:3000` (`web/index.html:633`): para publicarla hay que
+  cambiar esa URL.
+- **No hay configuración de despliegue** en el repo (ni CI, ni Docker, ni
+  ficheros de un proveedor de hosting).
+
+---
+
+## 8. Los dos bots de demostración
+
+Los dos viven en `supabase/seed-demo.sql`, con ids fijos para poder ponerlos
+en el `<script>` de una web. Son **el mismo motor con distintos datos**.
+
+| | Kobo | Bea |
+| --- | --- | --- |
+| Id | `6b0b0000-0000-4000-8000-000000000001` | `6b0b0000-0000-4000-8000-000000000002` |
+| Nombre / empresa | Kōbō / The Kobo Studio | Bea / Bea Care (demo) |
+| Color | `#A32A20` | `#7A9E87` |
+| Ficha de oportunidad | Activada | Desactivada |
+| Instrucciones | `supabase/seed-demo.sql:16-33` | `supabase/seed-demo.sql:49-72` |
+| Conocimiento | `supabase/seed-demo.sql:88-112` | `supabase/seed-demo.sql:113-130` |
+
+### Kobo — el asistente de la web del estudio
+
+- **Qué es:** el asistente de la web de The Kobo Studio. Doble objetivo:
+  explicar qué hace el estudio y entender el proyecto de quien escribe
+  (`supabase/seed-demo.sql:16-17`).
+- **Qué sabe:** tres entradas de conocimiento: "Quiénes somos", "Servicios" y
+  "Cómo trabajamos" (`supabase/seed-demo.sql:88-112`).
+- **Cómo se comporta:** tono cercano y directo, tutea, frases cortas. Hace
+  preguntas de una en una: problema y para quién, sistemas existentes, plazo y
+  presupuesto orientativo, y nombre y email (este último solo si la persona
+  quiere que la contacten). Al final resume el proyecto en 3-4 líneas
+  (`supabase/seed-demo.sql:19-28`).
+- **Límites:** no da precios ni plazos cerrados, no inventa clientes ni cifras
+  y, si no sabe algo, ofrece escribir a hola@kobostudio.es
+  (`supabase/seed-demo.sql:30-33`).
+- Sus conversaciones alimentan la **ficha de oportunidad** (RF-18 a RF-24).
+
+### Bea doula v0 — el caso de diseño de Bea Care
+
+- **Qué es:** una acompañante virtual para embarazadas, versión 0 de
+  **demostración**, con un papel parecido al de una doula: acompañar, informar
+  con calma y ayudar a preparar preguntas para los profesionales. Dice que no
+  es matrona, ginecóloga ni médica (`supabase/seed-demo.sql:49-51`).
+- **Qué sabe:** cuatro entradas: "Aviso de demostración", "Trimestres del
+  embarazo (información general)", "Preparar la consulta con la matrona" y
+  "Preparar la llegada del bebé" (`supabase/seed-demo.sql:113-130`). Si le
+  preguntan quién ha revisado la información, debe decir que es una demo y
+  que la versión real se validará con matronas
+  (`supabase/seed-demo.sql:114-115`).
+- **Cómo se comporta:** cálida, serena, nunca alarmista, tutea, respuestas
+  breves (`supabase/seed-demo.sql:53`). Explica la evolución general del
+  embarazo, ayuda a preparar consultas, acompaña emocionalmente y orienta
+  sobre preparación al parto, lactancia y llegada del bebé
+  (`supabase/seed-demo.sql:55-59`).
+- **Límites de Bea:**
+  - **No diagnostica:** no interpreta pruebas ni ecografías ni dice que un
+    síntoma "no es nada" (`supabase/seed-demo.sql:62`).
+  - **No medica:** no recomienda, ajusta ni desaconseja medicamentos,
+    suplementos o dosis (`supabase/seed-demo.sql:63`).
+  - **No sustituye una consulta:** ante la duda, deriva
+    (`supabase/seed-demo.sql:64`).
+  - **Deriva ante señales de alarma:** sangrado, pérdida de líquido, dolor
+    abdominal intenso, contracciones regulares antes de la semana 37, dolor de
+    cabeza fuerte con visión borrosa o hinchazón brusca, fiebre, o **notar que
+    el bebé se mueve menos de lo habitual**. Su **primera frase** debe ser que
+    contacte ya con su matrona, urgencias de maternidad o el 112
+    (`supabase/seed-demo.sql:66-68`).
+  - **Salud mental:** ante tristeza profunda, desesperanza o ideas de hacerse
+    daño, anima a hablar hoy con su matrona o médico y recuerda el 024 y el
+    112 (`supabase/seed-demo.sql:70`).
+  - **No pide datos personales ni de salud innecesarios**
+    (`supabase/seed-demo.sql:72`).
+- **Importante:** todos estos límites son **instrucciones al modelo**, no
+  controles en código. Nada en el código detecta una señal de alarma ni
+  garantiza la derivación; depende de que el modelo obedezca. No hay tests
+  automáticos de estas conductas: se comprueban a mano (§10). El contenido
+  **no está validado por profesionales sanitarios**.
+
+### La personalidad se ajusta desde el panel
+
+Las instrucciones son la columna `bots.descripcion` y el conocimiento es la
+tabla `conocimiento`; ambas se editan en `/admin/bots` sin tocar código
+(RF-14, RF-15). El cambio se aplica en el siguiente mensaje, porque la API
+lee la configuración en cada petición (`src/app/api/chat/route.ts:52-64`).
+Ojo: relanzar `supabase/seed-demo.sql` sobrescribe las instrucciones de Kobo
+y Bea y **reemplaza entero** su conocimiento (`supabase/seed-demo.sql:39-42`,
+`78-85`).
