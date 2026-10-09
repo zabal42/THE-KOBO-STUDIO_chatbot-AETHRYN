@@ -15,6 +15,8 @@ create table if not exists public.bots (
   logo_url         text,
   activo           boolean not null default true,
   whatsapp_numero  text,
+  -- KOBO-04: si es true, el panel puede generar la ficha de oportunidad.
+  genera_ficha_oportunidad boolean not null default false,
   created_at       timestamptz not null default now()
 );
 
@@ -97,6 +99,32 @@ create policy "conocimiento_authenticated_all"
   to authenticated
   using (true)
   with check (true);
+
+-- =========================================================
+-- 5. fichas_oportunidad — resumen del lead, 1:1 con conversaciones (KOBO-04)
+-- =========================================================
+-- Cada campo puede ser null: si la conversación no lo dice, no se inventa.
+create table if not exists public.fichas_oportunidad (
+  id                 uuid primary key default gen_random_uuid(),
+  conversacion_id    uuid not null unique references public.conversaciones(id) on delete cascade,
+  problema           text,
+  sector             text,
+  integraciones      text[],
+  plazo              text,
+  contacto_nombre    text,
+  contacto_email     text,
+  contacto_telefono  text,
+  generada_at        timestamptz not null default now(),
+  created_at         timestamptz not null default now()
+);
+
+alter table public.fichas_oportunidad enable row level security;
+
+create policy "fichas_oportunidad_authenticated_select"
+  on public.fichas_oportunidad
+  for select
+  to authenticated
+  using (true);
 
 -- =========================================================
 -- Índices
