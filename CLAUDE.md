@@ -17,7 +17,8 @@ content). Business integrations (AimHarder, WhatsApp/Twilio, cron) were removed
 on purpose; do not reintroduce them without an explicit task.
 
 Stack: Next.js 16 (App Router) · TypeScript · Supabase (Postgres + RLS) ·
-OpenAI. No test framework is installed yet — do not claim tests were run.
+OpenAI · Vitest (`npm test`; unit tests with Supabase and OpenAI mocked,
+no `.env.local` needed). Do not claim tests were run unless you ran them.
 
 Language: this document and the STA kernel are in English. **Code comments,
 commit messages, documentation under `docs/`, and all user-facing strings are
@@ -40,8 +41,8 @@ in Spanish.** Keep it that way.
 
 ## Definition of Done for any code change
 
-`npm run lint` and `npm run build` must both pass. If you did not run them,
-say so explicitly (see §9).
+`npm run lint`, `npx tsc --noEmit`, `npm test` and `npm run build` must all
+pass. If you did not run any of them, say so explicitly (see §9).
 
 ---
 # 1. ShapingTheAxe — framework (governs how all material work is done)

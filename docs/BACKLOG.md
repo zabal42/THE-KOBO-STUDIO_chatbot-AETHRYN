@@ -30,8 +30,7 @@ A cada tarea se le añaden dos campos que pide el backlog: **Alcance** y
 **Qué NO tocar**. El **Criterio de hecho** sustituye a "Verification" y es
 siempre comprobable con un comando o una acción concreta.
 
-Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
-`npm run lint` y `npm run build` pasan.
+Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`.
 
 ---
 
@@ -154,7 +153,7 @@ Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
   - Las rutas no importan el adaptador en memoria (comprobable con
     `grep -rn "memoria" src/app/api` o el nombre que se le dé).
   - Las tres notas de documentación están escritas en el repo.
-  - `npm run lint` y `npm run build` pasan.
+  - Cumple la Definition of Done de `CLAUDE.md`.
 - **Condición de parada:** si hace falta almacén compartido ya (despliegue con
   varias instancias), es otra tarea: un adaptador nuevo, no un cambio de rutas.
 - **Dependencias:** KOBO-02 (Vitest y mocks).
@@ -250,7 +249,7 @@ Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
     bots sin la columna activa; y generación correcta con usuario autenticado
     sin rol `admin`.
   - Fallo simulado de OpenAI → mensaje explícito en la página.
-  - `npm run lint` y `npm run build` pasan.
+  - Cumple la Definition of Done de `CLAUDE.md`.
 - **Condición de parada:** cualquier propuesta de generación automática
   (inactividad, cron, al cerrar el widget) queda fuera: tarea aparte y
   explícita, como exige `CLAUDE.md`.
@@ -350,7 +349,7 @@ Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
   - Tests (Vitest) del helper y de al menos una acción por tabla con
     `getUser()` mockeado: sin sesión, rol solo en `user_metadata`, sin rol y
     con `app_metadata.rol = "admin"`.
-  - `npm run lint` y `npm run build` pasan.
+  - Cumple la Definition of Done de `CLAUDE.md`.
 - **Condición de parada:** si el modelo de roles necesita más de dos niveles o
   roles por bot (multi-tenant real con varios clientes en el mismo panel),
   replanificar: es otra arquitectura.
@@ -427,3 +426,20 @@ tienen avisos conocidos en esta fecha.
   RLS real que filtre por tenant (sin depender de la service role en las
   lecturas del panel) y pruebas cross-tenant que demuestren que un usuario de
   un tenant no ve ni modifica datos de otro.
+
+### Vitest fijado en la versión 4
+
+- **Qué pasa:** Vitest 5 requiere `@types/node` 22 o superior y el proyecto
+  usa `^20`. Por eso KOBO-02 fija `vitest` en `^4.1.11`, que acepta
+  `@types/node` 20.
+- **Cuándo resolverlo:** al subir `@types/node` a 22 o superior (tarea
+  aparte), se puede pasar a Vitest 5 y verificar con `npm test`.
+
+### npm 10 falla al instalar dependencias de desarrollo
+
+- **Qué pasa:** con npm 10, `npm install -D vitest` falla con
+  `Cannot read properties of null (reading 'edgesOut')`, un fallo interno del
+  resolvedor de npm.
+- **Qué hacer:** usar npm 11 o superior para instalar o actualizar
+  dependencias (por ejemplo, `npx npm@11 install …`). `npm ci` con npm 10
+  sigue funcionando con el `package-lock.json` resultante.
