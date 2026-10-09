@@ -209,6 +209,12 @@ Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
     - Campo "Generar ficha de oportunidad" en el formulario del bot
       (`BotForm.tsx` + `leerCamposBot` en `src/lib/actions/bots.ts`), para no
       depender del SQL Editor.
+  - **Autenticación en la acción:** la server action de generar la ficha
+    obtiene el usuario con `supabase.auth.getUser()` y, si no hay usuario
+    autenticado, devuelve error de autorización **antes** de leer la
+    conversación o llamar a OpenAI. No exige rol `admin` (eso es KOBO-05 y
+    solo para bots y conocimiento), pero tampoco confía solo en que
+    `src/proxy.ts` proteja `/admin/*`: la acción se defiende por sí misma.
   - Tipos actualizados en `src/types/index.ts`.
 - **Qué NO tocar:** el flujo de `/api/chat` (la ficha no se genera en la ruta
   pública ni alarga la respuesta al usuario); el contenido de Bea; ninguna
@@ -235,10 +241,14 @@ Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
     contacto ficticio dado.
   - En una conversación de Bea no aparece el botón, y llamar a la acción
     directamente con ese id devuelve error sin llamar a OpenAI.
+  - Invocar la acción sin sesión devuelve error de autorización, sin consultar
+    la conversación ni llamar a OpenAI.
   - Una conversación en la que no se da contacto muestra `contacto` vacío.
-  - Tests (Vitest): validación de la ficha (JSON incompleto o con tipos
-    erróneos se rechaza) y rechazo de la acción para bots sin la columna
-    activa; OpenAI y Supabase mockeados.
+  - Tests (Vitest), con OpenAI, Supabase y `getUser()` mockeados: validación
+    de la ficha (JSON incompleto o con tipos erróneos se rechaza); rechazo de
+    la acción sin usuario autenticado (`getUser()` sin usuario); rechazo para
+    bots sin la columna activa; y generación correcta con usuario autenticado
+    sin rol `admin`.
   - Fallo simulado de OpenAI → mensaje explícito en la página.
   - `npm run lint` y `npm run build` pasan.
 - **Condición de parada:** cualquier propuesta de generación automática
@@ -398,3 +408,22 @@ probar un `overrides` en `package.json` en una tarea aparte y verificar con
 `found 0 vulnerabilities`. Las dependencias de producción (`next`, `react`,
 `react-dom`, `@supabase/ssr`, `@supabase/supabase-js`, `openai`, `cookie`) no
 tienen avisos conocidos en esta fecha.
+
+---
+
+## Deuda conocida
+
+### Panel sin aislamiento por tenant
+
+- **Qué pasa:** el panel lee y escribe con la *service role*
+  (`createAdminClient()` en `src/lib/conversaciones.ts` y en
+  `src/lib/actions/`), que se salta RLS. Cualquier usuario autenticado en el
+  panel ve las conversaciones de **todos** los bots. KOBO-05 solo restringe
+  crear, editar y borrar bots y conocimiento; no cambia esto.
+- **Por qué es aceptable hoy:** el único usuario del panel es el equipo de
+  Kobo, que ya debe poder ver todos los bots.
+- **Cuándo deja de serlo:** antes de dar acceso al panel a un cliente. En ese
+  momento hay que aislar por tenant (Fase 3 del dossier): columna `tenant_id`,
+  RLS real que filtre por tenant (sin depender de la service role en las
+  lecturas del panel) y pruebas cross-tenant que demuestren que un usuario de
+  un tenant no ve ni modifica datos de otro.
