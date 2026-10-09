@@ -30,8 +30,7 @@ A cada tarea se le añaden dos campos que pide el backlog: **Alcance** y
 **Qué NO tocar**. El **Criterio de hecho** sustituye a "Verification" y es
 siempre comprobable con un comando o una acción concreta.
 
-Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
-`npm run lint` y `npm run build` pasan.
+Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`.
 
 ---
 
@@ -154,7 +153,7 @@ Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
   - Las rutas no importan el adaptador en memoria (comprobable con
     `grep -rn "memoria" src/app/api` o el nombre que se le dé).
   - Las tres notas de documentación están escritas en el repo.
-  - `npm run lint` y `npm run build` pasan.
+  - Cumple la Definition of Done de `CLAUDE.md`.
 - **Condición de parada:** si hace falta almacén compartido ya (despliegue con
   varias instancias), es otra tarea: un adaptador nuevo, no un cambio de rutas.
 - **Dependencias:** KOBO-02 (Vitest y mocks).
@@ -250,7 +249,7 @@ Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
     bots sin la columna activa; y generación correcta con usuario autenticado
     sin rol `admin`.
   - Fallo simulado de OpenAI → mensaje explícito en la página.
-  - `npm run lint` y `npm run build` pasan.
+  - Cumple la Definition of Done de `CLAUDE.md`.
 - **Condición de parada:** cualquier propuesta de generación automática
   (inactividad, cron, al cerrar el widget) queda fuera: tarea aparte y
   explícita, como exige `CLAUDE.md`.
@@ -350,7 +349,7 @@ Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
   - Tests (Vitest) del helper y de al menos una acción por tabla con
     `getUser()` mockeado: sin sesión, rol solo en `user_metadata`, sin rol y
     con `app_metadata.rol = "admin"`.
-  - `npm run lint` y `npm run build` pasan.
+  - Cumple la Definition of Done de `CLAUDE.md`.
 - **Condición de parada:** si el modelo de roles necesita más de dos niveles o
   roles por bot (multi-tenant real con varios clientes en el mismo panel),
   replanificar: es otra arquitectura.
