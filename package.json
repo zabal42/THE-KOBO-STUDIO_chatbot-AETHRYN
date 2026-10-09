@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "web": "python3 -m http.server 5500 --directory web"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",
