@@ -5,6 +5,18 @@
 **Preparado en:** tarea KOBO-01
 **Fecha:** 2026-10-09
 
+## Orden de ejecución
+
+Decidido por Zabal:
+
+1. **KOBO-02** — Tests mínimos con Vitest. Es la red para todo lo demás.
+2. **KOBO-04** — Ficha de oportunidad.
+3. **KOBO-05** — Panel por roles.
+4. **KOBO-03** — Rate limit.
+
+KOBO-04, KOBO-05 y KOBO-03 dependen de KOBO-02 (Vitest y mocks); entre ellas
+no hay dependencias técnicas, el orden es de prioridad.
+
 ## Formato
 
 Se usa como base la plantilla `STA/templates/implementation-plan.md`, pero solo
@@ -20,13 +32,6 @@ siempre comprobable con un comando o una acción concreta.
 
 Para todas las tareas de código rige la Definition of Done de `CLAUDE.md`:
 `npm run lint` y `npm run build` pasan.
-
-## Orden propuesto
-
-1. **KOBO-02** primero: sin red de tests, el resto se toca a ciegas.
-2. **KOBO-03** después: reutiliza Vitest y los mocks de KOBO-02.
-3. **KOBO-05** antes de cualquier piloto con más de un usuario en el panel.
-4. **KOBO-04** al final: es funcionalidad nueva, no endurecimiento.
 
 ---
 
