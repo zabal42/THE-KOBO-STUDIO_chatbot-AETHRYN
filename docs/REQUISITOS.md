@@ -247,3 +247,448 @@ Harness: generar esas filas a partir de la ficha de un cliente.
 | **Usuario del panel** | Implementado | Todo el panel: crear, editar y borrar bots y conocimiento; ver todas las conversaciones de todos los bots; generar fichas. | Usuario con email y contraseña en Supabase Auth (`src/app/admin/login/page.tsx:19-23`). Hoy **todos los usuarios del panel tienen los mismos permisos**: no hay roles. |
 | **Administrador por rol** | Futuro (KOBO-05) | Solo él podrá crear, editar o borrar bots y conocimiento. | `app_metadata.rol === "admin"` en Supabase, comprobado dentro de cada server action. |
 | **Cliente con su propio panel** | Futuro (deuda multi-tenant) | Ver y gestionar solo sus bots y sus conversaciones. | Requiere columna `tenant_id`, RLS por tenant y pruebas cross-tenant. Ver `docs/BACKLOG.md`, "Panel sin aislamiento por tenant". |
+
+---
+
+## 5. Requisitos funcionales implementados
+
+Cada ficha dice **cómo está verificada**:
+
+- **Test**: hay un test automático (Vitest) que lo demuestra. Los tests se
+  ejecutan con `npm test`, con Supabase y OpenAI simulados.
+- **Código**: se ha comprobado leyendo el código en las líneas citadas, pero
+  ningún test lo ejecuta. Es lo que el código dice que hace; no se ha probado
+  en un navegador para este documento.
+
+Para KOBO-RF se ejecutó `npm test` el 2026-10-09 sobre `main` (`4928b66`):
+**4 ficheros, 65 tests, todos pasan**.
+
+### Chat y widget
+
+#### RF-01 — Widget embebible con una línea
+
+- **Actor:** visitante de la web (y quien instala el widget en su web).
+- **Descripción:** pegar
+  `<script src="https://<servidor>/widget.js?bot=<id>" defer></script>` en
+  cualquier web crea un iframe fijo abajo a la derecha que carga
+  `/widget-embed?bot=<id>`. El iframe mide 70×70 px cerrado y 420×620 px
+  abierto: el widget avisa al cargador con `postMessage` y el cargador solo
+  acepta mensajes de su propio iframe. Las cabeceras permiten cargar el script
+  desde cualquier origen y meter el iframe en cualquier web.
+- **Criterio de aceptación:** en una web con esa línea aparece la burbuja; al
+  pulsarla se abre el chat; sin `?bot=` no se crea nada.
+- **Evidencia (código):** cargador `src/app/widget.js/route.ts:5-45`
+  (sin bot no hace nada: línea 10; filtro de origen del mensaje: línea 23);
+  aviso de tamaño `src/components/chat/ChatWidget.tsx:106-114`; tamaños
+  `src/components/chat/ChatWidget.tsx:67-68`; cabeceras
+  `next.config.ts:4-18`; uso real en `web/index.html:633`.
+
+#### RF-02 — Chat con respuesta en streaming
+
+- **Actor:** visitante.
+- **Descripción:** `POST /api/chat` llama a OpenAI con `stream: true` y
+  `max_tokens: 800` y reenvía cada fragmento al navegador como texto plano.
+  El widget pinta los fragmentos según llegan y muestra "escribiendo..."
+  hasta el primero. Modelo: `OPENAI_MODEL` o, si no está, `gpt-4o`.
+- **Criterio de aceptación:** la respuesta aparece poco a poco, no de golpe.
+- **Evidencia (código):** `src/app/api/chat/route.ts:68-102`;
+  modelo `src/app/api/chat/route.ts:13`; cliente
+  `src/components/chat/useChatSession.ts:49-75`; indicador
+  `src/components/chat/ChatWidget.tsx:304-310`.
+
+#### RF-03 — Identidad e instrucciones por bot
+
+- **Actor:** visitante (lo percibe), usuario del panel (lo configura).
+- **Descripción:** el *system prompt* empieza por "Eres el asistente virtual
+  de "<empresa>" y te llamas <nombre>", añade las instrucciones del bot
+  (`descripcion`) si las hay, y termina siempre con la orden de basarse solo
+  en esa información y no inventar datos.
+- **Criterio de aceptación:** dos bots con distinta configuración reciben
+  prompts distintos; sin descripción no aparece el bloque de instrucciones; la
+  instrucción de no inventar va siempre al final.
+- **Evidencia (test):** `src/lib/bot.test.ts`, bloque
+  `construirSystemPrompt`: "con nombre: presenta al asistente con la empresa
+  y el nombre", "sin nombre: presenta al asistente solo con la empresa",
+  "con descripción: incluye las instrucciones de comportamiento", "con
+  descripción nula: omite el bloque de instrucciones", "la instrucción de no
+  inventar datos va siempre al final". Código: `src/lib/bot.ts:91-108`.
+
+#### RF-04 — Conocimiento por bot
+
+- **Actor:** visitante (lo percibe), usuario del panel (lo configura).
+- **Descripción:** en cada mensaje se cargan las entradas de `conocimiento`
+  del bot con `activo = true` y se añaden al prompt bajo "Base de
+  conocimiento", con el título delante si lo tienen. Todo el conocimiento
+  activo va entero en cada petición (no hay búsqueda ni recorte).
+- **Criterio de aceptación:** solo entra el conocimiento activo del bot que
+  responde; sin conocimiento no aparece la sección.
+- **Evidencia:** test `src/lib/bot.test.ts`: "conocimiento con título:
+  antepone el título al contenido", "conocimiento sin título: usa solo el
+  contenido", "varias entradas de conocimiento: se separan con una línea en
+  blanco", "conocimiento vacío: no aparece la base de conocimiento". Filtro
+  por bot y `activo` (código, sin test): `src/lib/bot.ts:73-84`.
+
+#### RF-05 — Historial limitado a 20 mensajes
+
+- **Actor:** sistema.
+- **Descripción:** al modelo se le envían, además del mensaje nuevo, los 20
+  mensajes más recientes de la conversación, en orden cronológico. Limita
+  coste y tamaño de contexto.
+- **Criterio de aceptación:** en una conversación con más de 20 mensajes
+  previos, OpenAI recibe system + 20 previos + el nuevo.
+- **Evidencia (código):** constante `src/lib/bot.ts:11`; consulta
+  `src/lib/bot.ts:58-71`; montaje `src/lib/bot.ts:110-125`. **Sin test.**
+
+#### RF-06 — Persistencia de conversaciones y mensajes
+
+- **Actor:** sistema.
+- **Descripción:** la conversación se busca por bot + canal `web` +
+  `session_id`; si no existe, se crea. El mensaje del usuario se guarda
+  **antes** de llamar a OpenAI; la respuesta completa se guarda **al terminar**
+  el stream, solo si no está vacía. Si falla el guardado de un mensaje, se
+  registra en el log del servidor y la conversación sigue.
+- **Criterio de aceptación:** tras chatear, la conversación y sus mensajes
+  aparecen en `/admin/conversaciones`.
+- **Evidencia (código):** `src/lib/bot.ts:26-56` y `src/lib/bot.ts:127-145`;
+  orden en `src/app/api/chat/route.ts:58-66` y
+  `src/app/api/chat/route.ts:90-95`. **Sin test.**
+- **Consecuencias que conviene saber:** el `session_id` se genera en cada
+  carga de la página (`src/components/chat/useChatSession.ts:12`), así que
+  **recargar la web empieza otra conversación**. Si OpenAI falla, el mensaje
+  del usuario queda guardado sin respuesta.
+
+#### RF-07 — Validaciones de entrada de `/api/chat`
+
+- **Actor:** sistema (frente a cualquier cliente HTTP).
+- **Descripción:** antes de tocar Supabase u OpenAI, la ruta rechaza:
+  JSON inválido → `400 "JSON inválido"`; falta `mensaje`, `bot_id` o
+  `session_id`, alguno no es texto, o `mensaje` está en blanco → `400`;
+  `mensaje` de más de 2000 caracteres → **`413`**; `bot_id` o `session_id` que
+  no son UUID → `400 "Identificador inválido"`. La longitud se comprueba antes
+  que el formato UUID.
+- **Criterio de aceptación:** cada caso devuelve su código y ningún rechazo
+  llama a Supabase ni a OpenAI. Un mensaje de exactamente 2000 caracteres pasa.
+- **Evidencia (test):** `src/app/api/chat/route.test.ts`, bloque
+  "POST /api/chat — validaciones de entrada" (14 casos): "JSON inválido → 400
+  'JSON inválido'", "cuerpo null → 400 por campos ausentes", "falta %s → 400"
+  (×3), "mensaje que no es texto → 400", "mensaje en blanco (%s) → 400" (×3),
+  "bot_id que no es UUID → 400 'Identificador inválido'", "session_id que no
+  es UUID → 400 'Identificador inválido'", "mensaje de 2001 caracteres →
+  413", "documenta el orden actual: la longitud se valida antes que el UUID",
+  "mensaje de exactamente 2000 caracteres → no se rechaza por longitud".
+  Código: `src/app/api/chat/route.ts:10-50`.
+
+#### RF-08 — Solo responden los bots activos
+
+- **Actor:** sistema.
+- **Descripción:** la API solo atiende a bots con `activo = true`; si no lo
+  encuentra responde `404 "Bot no encontrado"` sin llamar a OpenAI.
+- **Criterio de aceptación:** un bot desactivado desde el panel deja de
+  responder.
+- **Evidencia:** código `src/lib/bot.ts:13-24` y
+  `src/app/api/chat/route.ts:52-56`. El test "mensaje de exactamente 2000
+  caracteres → no se rechaza por longitud" demuestra el `404` sin llamada a
+  OpenAI cuando el bot no aparece; el filtro por `activo` en sí no tiene test.
+- **Ojo:** `/widget-embed` no filtra por `activo` (`src/app/widget-embed/page.tsx:21-25`):
+  la burbuja de un bot desactivado se sigue pintando, pero al escribir sale el
+  error del RF-09.
+
+#### RF-09 — Error visible en el widget
+
+- **Actor:** visitante.
+- **Descripción:** si `/api/chat` responde con error (4xx/5xx) o la petición
+  falla, el widget muestra en rojo "No se pudo enviar el mensaje. Inténtalo de
+  nuevo.".
+- **Criterio de aceptación:** con el backend parado o una clave de OpenAI
+  inválida, el visitante ve ese aviso en vez de quedarse esperando.
+- **Evidencia (código):** `src/components/chat/useChatSession.ts:42-44` y
+  `src/components/chat/useChatSession.ts:76-77`; pintado
+  `src/components/chat/ChatWidget.tsx:311-313`. **Sin test.** Lo de la clave
+  inválida se deduce del código: si la llamada a OpenAI falla antes de empezar
+  el stream, la ruta no lo captura y Next responde con error 500. No se ha
+  ejecutado para este documento (ver [§10](#10-verificación-manual)).
+- **Límite conocido:** si OpenAI falla **a mitad** del stream, el servidor lo
+  registra en el log y cierra el stream sin avisar
+  (`src/app/api/chat/route.ts:88-91`). El visitante ve una respuesta cortada o
+  ninguna, **sin mensaje de error**. Ver [§11](#11-deuda-conocida-y-hoja-de-ruta).
+
+#### RF-10 — Presentación segura de los mensajes
+
+- **Actor:** visitante.
+- **Descripción:** antes de pintar un mensaje, el widget escapa el HTML y
+  solo después convierte en enlaces las URL `http(s)` (abren en otra pestaña
+  con `noopener noreferrer`) y en negrita el texto entre `**`. El color del
+  texto se elige según el contraste con el color del bot.
+- **Criterio de aceptación:** un mensaje con `<script>` se ve como texto, no
+  se ejecuta.
+- **Evidencia (código):** `src/components/chat/ChatWidget.tsx:48-65` y
+  `src/components/chat/ChatWidget.tsx:238-247`; contraste
+  `src/components/chat/ChatWidget.tsx:31-46`. **Sin test.**
+
+#### RF-11 — Texto a voz
+
+- **Actor:** visitante.
+- **Descripción:** cada respuesta del asistente tiene un botón de
+  reproducir/pausar. Al pulsarlo, el widget pide el audio a `POST /api/tts`,
+  que usa OpenAI (`tts-1`, voz `nova`, MP3). El audio se guarda en memoria del
+  navegador para no pedirlo dos veces. Textos vacíos o de más de 2000
+  caracteres → `400`.
+- **Criterio de aceptación:** al pulsar el botón se oye la respuesta; la
+  segunda vez no hay nueva petición.
+- **Evidencia (código):** `src/app/api/tts/route.ts:4-26`; cliente
+  `src/components/chat/ChatWidget.tsx:123-166` y
+  `src/components/chat/ChatWidget.tsx:248-300`. **Sin test.**
+- **Límites:** `/api/tts` no recibe ni comprueba el bot ni la sesión, y no
+  protege `request.json()`: un cuerpo que no es JSON da error 500
+  (`src/app/api/tts/route.ts:5`). Si el audio falla, el botón vuelve a su
+  estado sin avisar (`src/components/chat/ChatWidget.tsx:161-162`).
+
+#### RF-12 — Sala de demos con selector de bot
+
+- **Actor:** equipo de Kobo (en una demo).
+- **Descripción:** `/widget` lista los bots activos como botones; al elegir
+  uno se monta su widget (`/widget?bot=<id>`). Si no se elige, usa
+  `NEXT_PUBLIC_DEMO_BOT_ID` o el primer bot activo. Si no hay bots activos,
+  muestra un aviso con el siguiente paso. La portada `/` enlaza a la sala.
+- **Criterio de aceptación:** con el seed cargado aparecen Kobo y Bea; al
+  cambiar de botón cambian nombre, color y comportamiento del chat.
+- **Evidencia (código):** `src/app/widget/page.tsx:9-72` (consulta 23-28,
+  elección 31, selector 42-56, aviso 66-70); portada `src/app/page.tsx:12-17`.
+  **Sin test.**
+
+### Panel
+
+#### RF-13 — Panel con login
+
+- **Actor:** usuario del panel.
+- **Descripción:** todo `/admin/*` exige sesión de Supabase Auth; sin sesión
+  redirige a `/admin/login`, y con sesión `/admin/login` redirige a
+  `/admin/bots`. Login con email y contraseña; error genérico "Correo o
+  contraseña incorrectos.". Botón de cerrar sesión. Las cookies de sesión no
+  tienen caducidad: se borran al cerrar el navegador.
+- **Criterio de aceptación:** sin login no se ve ninguna página del panel.
+- **Evidencia (código):** `src/proxy.ts:4-30`; login
+  `src/app/admin/login/page.tsx:14-33`; cierre
+  `src/components/admin/LogoutButton.tsx:9-14`; cookies
+  `src/lib/supabase/cookies.ts:8-13`. **Sin test.**
+- **Límite:** no hay roles. Cualquier usuario creado en Supabase Auth tiene
+  acceso total al panel (ver [§9](#9-qué-no-hace-hoy) y KOBO-05).
+
+#### RF-14 — Gestión de bots
+
+- **Actor:** usuario del panel.
+- **Descripción:** `/admin/bots` lista los bots (id copiable con un clic,
+  nombre, empresa, WhatsApp, estado). Se puede crear, editar y borrar (con
+  confirmación). El formulario edita nombre, empresa, instrucciones, color,
+  logo (ruta en `public/` o URL), número de WhatsApp, activo y "Generar ficha
+  de oportunidad". **Cambiar las instrucciones o el conocimiento cambia el
+  comportamiento del bot sin tocar código.**
+- **Criterio de aceptación:** un cambio guardado en el panel se nota en el
+  siguiente mensaje del chat.
+- **Evidencia (código):** listado `src/app/admin/(dashboard)/bots/page.tsx`;
+  formulario `src/components/admin/BotForm.tsx:27-197`; acciones
+  `src/lib/actions/bots.ts:7-60`; copiar id
+  `src/components/admin/CopyableId.tsx:9-31`; borrar
+  `src/components/admin/DeleteBotButton.tsx:14-23`. **Sin test.**
+- **Límites:** las acciones no comprueban sesión ni rol por sí mismas (solo
+  las protege `src/proxy.ts`); borrar un bot borra en cascada todas sus
+  conversaciones; el campo WhatsApp se guarda pero ningún código lo usa.
+
+#### RF-15 — Gestión del conocimiento
+
+- **Actor:** usuario del panel.
+- **Descripción:** `/admin/bots/<id>/conocimiento` lista las entradas del bot
+  (título, contenido recortado a 80 caracteres, estado) y permite añadir,
+  editar y borrar. Las entradas nuevas se crean activas.
+- **Criterio de aceptación:** una entrada añadida se usa en el siguiente
+  mensaje del bot.
+- **Evidencia (código):**
+  `src/app/admin/(dashboard)/bots/[id]/conocimiento/page.tsx`;
+  formulario `src/components/admin/ConocimientoForm.tsx:31-88`; acciones
+  `src/lib/actions/conocimiento.ts:7-66` (alta activa: línea 24). **Sin test.**
+- **Límite:** el panel muestra si una entrada está activa, pero **no permite
+  cambiarlo**: el formulario no tiene ese campo. Desactivar una entrada solo
+  se puede hacer en el SQL Editor.
+
+#### RF-16 — Listado de conversaciones
+
+- **Actor:** usuario del panel.
+- **Descripción:** `/admin/conversaciones` lista las conversaciones de
+  **todos** los bots, de la más reciente a la más antigua (bot, canal,
+  identificador recortado, fecha), con un desplegable para filtrar por bot.
+- **Criterio de aceptación:** tras chatear con Kobo, su conversación aparece
+  la primera; al filtrar por Bea desaparece.
+- **Evidencia (código):** `src/app/admin/(dashboard)/conversaciones/page.tsx:18-102`;
+  consulta `src/lib/conversaciones.ts:12-33`; filtro
+  `src/components/admin/ConversacionesBotFilter.tsx:11-38`. **Sin test.**
+
+#### RF-17 — Detalle de conversación
+
+- **Actor:** usuario del panel.
+- **Descripción:** `/admin/conversaciones/<id>` muestra todos los mensajes en
+  orden, con hora, y, si el bot tiene la ficha activada, la sección "Ficha de
+  oportunidad" encima.
+- **Criterio de aceptación:** se ve la conversación completa, no solo los
+  últimos 20 mensajes.
+- **Evidencia (código):**
+  `src/app/admin/(dashboard)/conversaciones/[id]/page.tsx:86-171`; mensajes
+  `src/lib/conversaciones.ts:51-66`. **Sin test.**
+
+### Ficha de oportunidad (KOBO-04)
+
+#### RF-18 — Activación por bot
+
+- **Actor:** usuario del panel.
+- **Descripción:** la ficha solo existe para bots con
+  `genera_ficha_oportunidad = true`. Por defecto está desactivada. Se activa
+  con una casilla del formulario del bot. En la demo: activada en Kobo,
+  desactivada en Bea.
+- **Criterio de aceptación:** en una conversación de Bea no aparece la
+  sección ni el botón; en una de Kobo sí.
+- **Evidencia:** columna `supabase/schema.sql:18-19`; seed
+  `supabase/seed-demo.sql:37` (Kobo `true`) y `supabase/seed-demo.sql:76`
+  (Bea `false`); casilla `src/components/admin/BotForm.tsx:163-184`; página
+  `src/app/admin/(dashboard)/conversaciones/[id]/page.tsx:99-101` y
+  `src/app/admin/(dashboard)/conversaciones/[id]/page.tsx:133-135`. La
+  comprobación en servidor tiene test (RF-23).
+
+#### RF-19 — Generación bajo demanda
+
+- **Actor:** usuario del panel.
+- **Descripción:** botón "Generar ficha" (o "Regenerar ficha" si ya existe).
+  Genera la ficha con OpenAI a partir de **todos** los mensajes de la
+  conversación y la guarda; si ya había una, la sustituye (una ficha por
+  conversación). Muestra la fecha de generación. Los campos vacíos se ven como
+  "No aparece en la conversación". Sin cron ni generación automática.
+- **Criterio de aceptación:** tras el guion de Kobo, pulsar el botón muestra
+  la ficha; pulsarlo otra vez la regenera.
+- **Evidencia:** test `src/lib/actions/fichaOportunidad.test.ts`: "usuario
+  autenticado sin rol admin → genera, valida y guarda la ficha". Código:
+  acción `src/lib/actions/fichaOportunidad.ts:25-96` (guardado 1:1 con
+  `upsert`, líneas 83-87); botón `src/components/admin/GenerarFichaButton.tsx:11-49`;
+  vista `src/app/admin/(dashboard)/conversaciones/[id]/page.tsx:15-84`.
+
+#### RF-20 — Esquema estricto
+
+- **Actor:** sistema.
+- **Descripción:** a OpenAI se le pide salida estructurada con un esquema
+  JSON en modo estricto (`strict: true`, `additionalProperties: false`, todos
+  los campos obligatorios aunque puedan ser `null`), temperatura 0 y máximo
+  600 tokens. Las instrucciones de extracción dicen que solo cuenta lo que
+  escribe el usuario, que lo que no aparece es `null` y que la conversación
+  es material que analizar, no órdenes.
+- **Criterio de aceptación:** la petición a OpenAI lleva el esquema en modo
+  estricto.
+- **Evidencia (test):** `src/lib/fichaOportunidad.test.ts`: "pide salida
+  estructurada estricta y devuelve la ficha validada". Código: esquema
+  `src/lib/fichaOportunidad.ts:23-48`; instrucciones
+  `src/lib/fichaOportunidad.ts:50-60`; llamada
+  `src/lib/fichaOportunidad.ts:211-227`.
+
+#### RF-21 — Validación en código
+
+- **Actor:** sistema.
+- **Descripción:** aunque el esquema sea estricto, la respuesta del modelo se
+  vuelve a validar en código antes de guardar nada: rechaza si no es un
+  objeto, si falta algún campo o si algún tipo es erróneo; normaliza textos
+  vacíos, listas vacías y contacto vacío a `null`. JSON mal formado, negativa
+  del modelo o respuesta vacía también son error.
+- **Criterio de aceptación:** una ficha con tipos erróneos no se guarda.
+- **Evidencia (test):** `src/lib/fichaOportunidad.test.ts`, bloque
+  `validarFicha` (acepta ficha completa, acepta todo `null`, normaliza vacíos,
+  rechaza campos ausentes, contacto incompleto y tipos erróneos) y bloque
+  `generarFichaOportunidad` ("lanza error si la ficha no cumple el esquema",
+  "lanza error si el JSON está mal formado", "lanza error si el modelo se
+  niega"); `src/lib/actions/fichaOportunidad.test.ts`: "OpenAI devuelve una
+  ficha con tipos erróneos → no se guarda". Código:
+  `src/lib/fichaOportunidad.ts:81-151` y `src/lib/fichaOportunidad.ts:229-248`.
+
+#### RF-22 — Confirmación del contacto contra lo que escribió el usuario
+
+- **Actor:** sistema.
+- **Descripción:** "nunca afirmar lo que no se ha obtenido". El email solo se
+  guarda si aparece literalmente (sin distinguir mayúsculas) en lo que
+  escribió el usuario; el teléfono, si sus dígitos (6 o más) aparecen en los
+  dígitos de lo que escribió el usuario. Si no, se descartan. Si no queda
+  ningún dato, el contacto es `null`. **El nombre no se puede comprobar así**
+  y depende solo de las instrucciones al modelo.
+- **Criterio de aceptación:** si el modelo inventa un email que el usuario no
+  dio, la ficha guardada no lo tiene.
+- **Evidencia (test):** `src/lib/fichaOportunidad.test.ts`, bloque
+  `confirmarContacto` ("mantiene email y teléfono que el usuario escribió",
+  "descarta email y teléfono que no aparecen en lo que dijo el usuario", "si
+  no queda ningún dato, contacto es null") y "descarta un email que el
+  usuario no dio"; `src/lib/actions/fichaOportunidad.test.ts`: "sin contacto
+  en la conversación → se guarda el contacto vacío aunque el modelo invente
+  uno". Código: `src/lib/fichaOportunidad.ts:163-197` y
+  `src/lib/fichaOportunidad.ts:250-255`.
+
+#### RF-23 — Controles previos a OpenAI
+
+- **Actor:** sistema (frente a cualquiera que invoque la acción).
+- **Descripción:** la acción se defiende sola, en este orden y **antes de
+  gastar en OpenAI**: (1) usuario autenticado con `getUser()`; si no, "No
+  autorizado: inicia sesión en el panel.", sin leer nada; (2) id con formato
+  UUID; (3) la conversación existe; (4) su bot tiene la ficha activada;
+  (5) hay al menos un mensaje del usuario. No exige rol admin.
+- **Criterio de aceptación:** en cada caso de rechazo no hay llamada a OpenAI
+  ni escritura en la base de datos.
+- **Evidencia (test):** `src/lib/actions/fichaOportunidad.test.ts`: "sin
+  usuario autenticado → error de autorización, sin leer la conversación ni
+  llamar a OpenAI", "getUser() con error de sesión → error de autorización,
+  sin tocar nada", "bot con la columna %s → error sin llamar a OpenAI" (×2:
+  `false` y columna ausente), "conversación inexistente → error sin llamar a
+  OpenAI", "id que no es UUID → error sin consultar la base de datos",
+  "conversación sin mensajes del usuario → error sin llamar a OpenAI".
+  Código: `src/lib/actions/fichaOportunidad.ts:28-69`.
+
+#### RF-24 — Errores explícitos de la ficha
+
+- **Actor:** usuario del panel.
+- **Descripción:** si falla la lectura de la conversación, OpenAI o el
+  guardado, el panel muestra un mensaje concreto ("No se ha podido consultar
+  la conversación.", "No se ha podido generar la ficha. Inténtalo de nuevo en
+  unos minutos.", "La ficha se ha generado, pero no se ha podido guardar.") y
+  no enseña una ficha vacía como si fuera real.
+- **Criterio de aceptación:** con OpenAI caído, aparece el aviso en rojo bajo
+  el botón y no se guarda nada.
+- **Evidencia (test):** `src/lib/actions/fichaOportunidad.test.ts`: "fallo
+  al leer la conversación → error explícito, no 'no encontrada'", "fallo de
+  OpenAI → mensaje explícito y no se guarda nada", "fallo al guardar → error
+  explícito"; `src/lib/fichaOportunidad.test.ts`: "propaga el fallo de la
+  llamada a OpenAI". Pintado del error (código):
+  `src/components/admin/GenerarFichaButton.tsx:42-46`.
+
+### Resumen
+
+| Id | Requisito | Verificación |
+| --- | --- | --- |
+| RF-01 | Widget embebible con una línea | Código |
+| RF-02 | Chat con streaming | Código |
+| RF-03 | Identidad e instrucciones por bot | Test |
+| RF-04 | Conocimiento por bot | Test (montaje) + código (filtro) |
+| RF-05 | Historial de 20 mensajes | Código |
+| RF-06 | Persistencia | Código |
+| RF-07 | Validaciones de `/api/chat` | Test |
+| RF-08 | Solo bots activos | Test parcial + código |
+| RF-09 | Error visible en el widget | Código |
+| RF-10 | Presentación segura | Código |
+| RF-11 | Texto a voz | Código |
+| RF-12 | Sala de demos | Código |
+| RF-13 | Panel con login | Código |
+| RF-14 | Gestión de bots | Código |
+| RF-15 | Gestión del conocimiento | Código |
+| RF-16 | Listado de conversaciones | Código |
+| RF-17 | Detalle de conversación | Código |
+| RF-18 | Ficha: activación por bot | Código + test (servidor) |
+| RF-19 | Ficha: bajo demanda | Test |
+| RF-20 | Ficha: esquema estricto | Test |
+| RF-21 | Ficha: validación en código | Test |
+| RF-22 | Ficha: confirmación del contacto | Test |
+| RF-23 | Ficha: controles previos | Test |
+| RF-24 | Ficha: errores explícitos | Test |
+
+**24 requisitos implementados**: 9 demostrados con test (RF-03, RF-07, RF-19
+a RF-24), 3 con test parcial (RF-04, RF-08, RF-18) y 12 solo con lectura de
+código. Todo lo que toca el navegador, el panel y Supabase real está sin test
+automático: por eso existe la [§10](#10-verificación-manual).
