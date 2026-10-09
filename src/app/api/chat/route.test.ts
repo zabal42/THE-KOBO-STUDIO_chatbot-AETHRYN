@@ -15,26 +15,10 @@ vi.mock("@/lib/openai", () => ({
 }));
 
 import { POST } from "@/app/api/chat/route";
+import { crearSupabaseFalso } from "@/test/supabaseFalso";
 
 const BOT_ID = "11111111-1111-4111-8111-111111111111";
 const SESSION_ID = "22222222-2222-4222-8222-222222222222";
-
-/**
- * Cliente de Supabase falso: cualquier cadena de consulta
- * (from().select().eq()...) termina en { data: null, error: null }.
- * Con eso buscarBotActivoPorId devuelve null y la ruta responde 404.
- */
-function crearSupabaseFalso() {
-  const resultado = { data: null, error: null };
-  const consulta: Record<string, unknown> = {};
-  for (const metodo of ["select", "eq", "order", "limit", "insert"]) {
-    consulta[metodo] = vi.fn(() => consulta);
-  }
-  for (const metodo of ["maybeSingle", "single", "returns"]) {
-    consulta[metodo] = vi.fn(async () => resultado);
-  }
-  return { from: vi.fn(() => consulta) };
-}
 
 function peticion(cuerpo: unknown) {
   return new NextRequest("http://localhost/api/chat", {
@@ -66,6 +50,8 @@ async function esperarRechazo(
 
 const FALTAN_CAMPOS = "Faltan campos requeridos: mensaje, bot_id, session_id";
 
+// Sin resultados configurados, toda consulta devuelve { data: null }: con eso
+// buscarBotActivoPorId devuelve null y la ruta responde 404.
 beforeEach(() => {
   createAdminClient.mockImplementation(crearSupabaseFalso);
 });
