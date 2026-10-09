@@ -1000,3 +1000,110 @@ lee la configuración en cada petición (`src/app/api/chat/route.ts:52-64`).
 Ojo: relanzar `supabase/seed-demo.sql` sobrescribe las instrucciones de Kobo
 y Bea y **reemplaza entero** su conocimiento (`supabase/seed-demo.sql:39-42`,
 `78-85`).
+
+---
+
+## 9. Qué NO hace hoy
+
+Dicho sin rodeos, para que nadie lo prometa en una reunión:
+
+- **Sin WhatsApp.** La integración con Twilio se retiró. Quedan restos
+  heredados sin uso: la columna `bots.whatsapp_numero`, el valor `whatsapp` en
+  `conversaciones.canal` (`supabase/schema.sql:17`, `38`), el campo en el
+  formulario del bot y la columna "WhatsApp" del listado. Ningún código envía
+  ni recibe WhatsApp.
+- **Sin reservas ni efectos secundarios.** El chat solo conversa: no reserva,
+  no cancela, no envía emails ni llama a otros sistemas. La única escritura
+  fuera de guardar mensajes es la ficha, y solo se guarda en la base de datos.
+- **Sin multi-tenant real.** No hay columna de tenant; el panel lee y escribe
+  con la service role y cualquier usuario ve las conversaciones de todos los
+  bots (`src/lib/conversaciones.ts:12-33`).
+- **Sin rate limit.** Ni por sesión ni por IP (KOBO-03).
+- **Sin roles.** Todos los usuarios del panel pueden todo (KOBO-05).
+- **Sin memoria entre visitas.** Recargar la página empieza una conversación
+  nueva (RF-06).
+- **Sin búsqueda en el conocimiento.** Se envía entero; no hay embeddings ni
+  RAG.
+- **Contenido de Bea sin validar por profesionales.** Es general y ficticio
+  (`supabase/seed-demo.sql:113-115`).
+- **No apto para internet abierto.** Por todo lo anterior, más la falta de
+  aviso de privacidad y consentimiento. Es una demo local (`docs/DEMO.md`
+  §4).
+
+---
+
+## 10. Verificación manual
+
+Pruebas de humo para hacer a mano con la demo montada según `docs/DEMO.md`
+(backend en :3000, web en :5500, seed cargado, usuario del panel creado).
+**Ninguna se ha ejecutado para este documento.** Zabal: táchalas al hacerlas
+y apunta la fecha.
+
+- [ ] **Burbuja en la web.** Abrir http://localhost:5500 → aparece la burbuja
+      abajo a la derecha (RF-01).
+- [ ] **Kobo responde.** Escribir "Hola, tengo una clínica de fisioterapia y
+      quiero una app para gestionar citas y pacientes." → la respuesta llega
+      en streaming y Kobo pregunta de una en una (RF-02, RF-03).
+- [ ] **Conversación visible en el panel.** Entrar en
+      http://localhost:3000/admin/conversaciones → la conversación aparece la
+      primera, con los mensajes completos en su detalle (RF-06, RF-16,
+      RF-17).
+- [ ] **Generar ficha en Kobo.** Tras dar un nombre y un email ficticios,
+      pulsar "Generar ficha" en el detalle → aparecen problema, sector y el
+      contacto tal como se escribió (RF-19, RF-22).
+- [ ] **Sin botón de ficha en Bea.** En http://localhost:3000/widget elegir
+      Bea, escribir algo y abrir esa conversación en el panel → no hay
+      sección ni botón de ficha (RF-18).
+- [ ] **Bea deriva ante una alarma.** Escribir a Bea "Desde ayer noto que el
+      bebé se mueve menos." → la **primera frase** pide contactar ya con la
+      matrona, urgencias de maternidad o el 112 (§8).
+- [ ] **Error visible con una clave de OpenAI inválida.** Poner un valor
+      falso en `OPENAI_API_KEY` en `.env.local`, reiniciar `npm run dev`,
+      escribir en la burbuja → aparece en rojo "No se pudo enviar el mensaje.
+      Inténtalo de nuevo." (RF-09). Restaurar la clave después.
+
+---
+
+## 11. Deuda conocida y hoja de ruta
+
+### 11.1 Deuda
+
+Ya recogida en `docs/BACKLOG.md`:
+
+| Deuda | Resumen | Cuándo pesa |
+| --- | --- | --- |
+| Panel sin aislamiento por tenant | Service role en todo el panel; cualquier usuario ve todo. | Antes de dar panel a un cliente. |
+| Vitest fijado en la v4 | Vitest 5 pide `@types/node` 22+. | Al subir `@types/node`. |
+| npm 10 falla al instalar dependencias de desarrollo | Usar npm 11+ para instalar; `npm ci` con npm 10 funciona. | Al tocar dependencias. |
+| `/admin/bots` estática en producción | El listado se congela en el build. | Antes de desplegar. |
+| `npm audit` | 5 avisos altos en desarrollo (`eslint-config-next` → `braces`); 0 en producción. | Cuando salga un `eslint-config-next` corregido. |
+
+Encontrada al escribir este documento (**no está en el BACKLOG**; se
+propone añadirla como tareas aparte):
+
+| Deuda | Evidencia | Por qué importa |
+| --- | --- | --- |
+| Fallos de Supabase tratados como "no existe" | `src/lib/bot.ts:16-23`, `62-83` | Rompe la regla "un fallo no es un resultado vacío": puede dar `404` falso o responder sin historial/conocimiento. |
+| Error a mitad del stream silencioso | `src/app/api/chat/route.ts:88-91` | El visitante ve una respuesta cortada sin aviso. |
+| Políticas RLS de inserción para `anon` | `supabase/schema.sql:51-55`, `76-80` | Permiten escribir conversaciones y mensajes saltándose `/api/chat`. |
+| Acciones de bots y conocimiento sin defensa propia | `src/lib/actions/bots.ts`, `src/lib/actions/conocimiento.ts` | Dependen solo de `proxy.ts` (KOBO-05 lo cubre si se aplica a todas). |
+| Widget incrustable en cualquier dominio | `next.config.ts:10-16` | Sin lista de dominios por bot, cualquiera puede usar un bot ajeno. |
+| No se puede desactivar conocimiento desde el panel | `src/components/admin/ConocimientoForm.tsx` | La columna `activo` existe pero solo se cambia por SQL. |
+| `/widget-embed` pinta bots inactivos | `src/app/widget-embed/page.tsx:21-25` | Burbuja visible que luego falla. |
+| Sin unicidad de conversación por sesión | `supabase/schema.sql:35-41`, `src/lib/bot.ts:33-49` | Dos peticiones simultáneas de una sesión nueva podrían crear dos conversaciones. |
+| `OPENAI_MODEL` no documentada | `.env.example` | Variable que cambia el modelo y solo se ve en el código. |
+| Restos de WhatsApp | `supabase/schema.sql:17`, `38`; `BotForm.tsx:133-148` | Confunde: sugiere una función que no existe. |
+| BACKLOG sin estado | `docs/BACKLOG.md` | KOBO-02 y KOBO-04 están hechas y no se marcan. |
+
+### 11.2 Hoja de ruta por fases
+
+| Fase | Objetivo | Qué hace falta (mínimo) |
+| --- | --- | --- |
+| **1. Demo** (hoy) | Enseñar a Manu e Iñigo que el producto existe y que un motor sirve a varios bots. | Ya está. Pasar la verificación manual (§10). |
+| **2. Piloto** | Un bot real (por ejemplo Kobo en la web del estudio) abierto a público. | KOBO-03 (rate limit), KOBO-05 (roles), aviso de privacidad y consentimiento, retención de datos, despliegue con `/admin/bots` dinámica, cerrar la deuda nueva de seguridad de §11.1 y observabilidad básica. KOBO-06 si se quiere Claude. |
+| **3. Bea validada con matronas** | Bea con contenido revisado por profesionales y datos de salud tratados con garantías. | Validación clínica del contenido y de las conductas de §8, pruebas de conducta repetibles (no solo a mano), análisis jurídico y evaluación de impacto (art. 9 RGPD), consentimiento explícito, minimización y retención. |
+| **4. Multi-tenant** | Varios clientes en el mismo motor, cada uno con su panel. | `tenant_id`, RLS por tenant sin service role en las lecturas del panel, pruebas cross-tenant, dominios permitidos por bot, límites y costes por cliente. |
+| **5. Harness** | Fábrica de asistentes: de la ficha del cliente a un bot configurado y probado. | Formato de "ficha del cliente", generación de configuración y conocimiento (la pieza de salida ya está aislada en `construirSystemPrompt`), batería de pruebas por bot y elección de modelo por bot (KOBO-06). |
+
+El orden de las fases 3 y 4 no está decidido; depende de si Bebeplanet llega
+antes que otros clientes.
